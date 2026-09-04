@@ -63,7 +63,9 @@ function openChat(chat) {
   renderMessages(chat);
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
-  document.querySelector('#messageInput').focus();
+  // En móvil no hacemos focus automático: evita que Safari/Chrome
+  // abra el teclado y desplace la cabecera fuera de la pantalla.
+  if (!window.matchMedia('(max-width: 760px)').matches) document.querySelector('#messageInput').focus();
 }
 function openDialog(kicker, title, choices, onChoice = null) {
   document.querySelector('#dialogKicker').textContent = kicker;
@@ -92,6 +94,7 @@ document.querySelector('#searchInput').addEventListener('input', (event) => { co
 const startNewChat = () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar?', agents, createChat);
 document.querySelector('#newChatBtn').addEventListener('click', startNewChat);
 document.querySelector('#mobileNewChatBtn').addEventListener('click', startNewChat);
+document.querySelector('#chatNewBtn').addEventListener('click', startNewChat);
 document.querySelector('#newGroupBtn').addEventListener('click', () => openDialog('NUEVO GRUPO', 'Elige los agentes del grupo', agents, (agent) => { groups.unshift({ name: `Grupo con ${agent.split(' · ')[0]}`, desc: '1 agente · nuevo', agents: [agent[0]] }); save(); renderGroups(); showToast('Grupo creado y guardado en este dispositivo'); }));
 document.querySelector('#groupsNav').addEventListener('click', () => { document.querySelector('.group-heading').scrollIntoView({ behavior: 'smooth' }); showToast('Mostrando grupos de agentes'); });
 document.querySelector('#viewAll').addEventListener('click', () => showToast(`Tienes ${chats.length} conversaciones guardadas`));
