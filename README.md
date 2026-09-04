@@ -10,14 +10,12 @@ La app puede instalarse desde el navegador móvil mediante “Añadir a pantalla
 
 ## Estado actual
 
-- Chats y grupos demo navegables.
-- Creación de chats y grupos guardada en el navegador.
-- Mensajes y modelo seleccionado guardados localmente.
-- Diseño responsive y PWA (`manifest.webmanifest` + `sw.js`).
-- Despliegue automático mediante GitHub `main` → Vercel.
-- **Todavía no conecta con Hermes ni ofrece sincronización multi-dispositivo.**
+- Backend serverless preparado en `api/` con conexión saliente a Hermes Cloud, sin exponer la clave al navegador.
+- `GET /api/health` comprueba configuración y disponibilidad del upstream.
+- `POST /api/chat` crea/reutiliza sesión y envía mensajes con modelo y esfuerzo.
+- El backend permanece **cerrado por defecto** hasta configurar autenticación propia.
 
-El almacenamiento local permite continuar en el mismo dispositivo/navegador, pero no sustituye una cuenta ni una base de datos compartida.
+El almacenamiento local sigue siendo temporal: todavía no sustituye una cuenta ni una base de datos compartida.
 
 ## Desarrollo local en Windows
 
@@ -30,12 +28,18 @@ python -m http.server 4173
 
 Abrir: <http://127.0.0.1:4173/>
 
-## Próxima fase: conexión real
+## Backend Hermes Cloud
 
-La conexión prevista es:
+La capa `api/` usa estas variables exclusivamente en el servidor de Vercel:
 
-```text
-Agent Hub en Vercel → backend/proxy seguro → Hermes Cloud o Hermes local
-```
+- `HERMES_CLOUD_URL`: URL base del gateway Hermes Cloud.
+- `HERMES_CLOUD_API_KEY`: clave Bearer del API server de Hermes. Nunca se coloca en `app.js`.
+- `AGENT_HUB_ACCESS_TOKEN`: control temporal para impedir que `/api/chat` sea un proxy público.
 
-No poner tokens, cookies, contraseñas, claves API, archivos `auth.json` ni contenido de `.env` en el frontend o en este repositorio. Antes de implementar la conexión hay que confirmar el endpoint, autenticación y alcance de Hermes Cloud.
+No debes enviarme ni pegar aquí ninguno de esos valores. Se configurarían directamente como variables privadas en Vercel cuando decidamos el mecanismo de login de Agent Hub.
+
+El siguiente paso funcional es sustituir el control temporal por autenticación propia con cookie segura y conectar el frontend a `/api/chat`. Hasta entonces, el endpoint no acepta mensajes, por diseño.
+
+## Próxima fase: audio y sincronización
+
+El audio grabado se añadirá como otra ruta backend (`/api/audio`) y no se conectará directamente desde la PWA a Hermes. La voz en vivo usará posteriormente un canal de streaming separado, preferiblemente WebRTC o WebSocket, sin mezclarlo con el endpoint de mensajes.
