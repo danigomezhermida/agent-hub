@@ -129,4 +129,4 @@ document.querySelectorAll('#modelMenu button').forEach((button) => button.addEve
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeDialog(); document.querySelector('#closeChat').click(); } if (event.key.toLowerCase() === 'n' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) document.querySelector('#newChatBtn').click(); });
 document.querySelector('#modelSelect').firstChild.textContent = `${selectedModel} `;
 render(); renderGroups(); selectChat(0);
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260904-7').catch(() => {}));
