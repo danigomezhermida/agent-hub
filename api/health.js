@@ -1,29 +1,33 @@
 const { json, configStatus, hermes } = require('./_lib/hermes');
+const { isAuthenticated, passwordConfigured, sessionSecret } = require('./_lib/auth');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET') {
     res.setHeader('allow', 'GET');
     return res.status(405).json({ error: 'method_not_allowed' });
   }
-
-  const config = configStatus();
-  let upstream = { status: 'not_configured' };
-  if (config.upstreamConfigured) {
-    try {
-      upstream = await hermes('/health');
-    } catch (error) {
-      upstream = { status: 'unreachable', httpStatus: error.status || 502 };
-    }
+  const status = configStatus();
+  const loginConfigured = passwordConfigured() && String(sessionSecret() || '').length >= 32;
+  if (!status.upstreamConfigured || !loginConfigured) {
+    return res.status(503).json({
+      status: 'not_ready',
+      service: 'agent-hub-backend',
+      hermes: { status: status.upstreamConfigured ? 'unknown' : 'not_configured' },
+      configuration: {
+        upstreamConfigured: status.upstreamConfigured,
+        accessControlConfigured: loginConfigured,
+        transcriptionConfigured: status.transcriptionConfigured,
+      },
+    });
   }
-
-  const result = {
-    status: config.upstreamConfigured && upstream.status !== 'unreachable' ? 'ok' : 'not_ready',
-    service: 'agent-hub-backend',
-    hermes: upstream,
-    configuration: config,
-  };
-  const response = json(result.status === 'ok' ? 200 : 503, result);
-  res.status(response.status);
-  Object.entries(response.headers).forEach(([key, value]) => res.setHeader(key, value));
-  return res.end(response.body);
+  if (!isAuthenticated(req)) {
+    return res.status(401).json({ status: 'unauthorized', service: 'agent-hub-backend' });
+  }
+  try {
+    await hermes('/health', { method: 'GET' });
+    return res.status(200).json({ status: 'ok', service: 'agent-hub-backend', hermes: { status: 'ok' } });
+  } catch (error) {
+    const code = error.code === 'upstream_not_configured' ? 503 : 502;
+    return res.status(code).json({ status: 'degraded', service: 'agent-hub-backend', hermes: { status: 'unreachable' } });
+  }
 };

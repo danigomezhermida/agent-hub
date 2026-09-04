@@ -10,9 +10,13 @@ La app puede instalarse desde el navegador móvil mediante “Añadir a pantalla
 
 ## Estado actual
 
-- Backend serverless preparado en `api/` con conexión saliente a Hermes Cloud, sin exponer la clave al navegador.
-- `GET /api/health` comprueba configuración y disponibilidad del upstream.
+- Login propio con cookie segura `HttpOnly` + `Secure` (`/api/login`, `/api/me`, `/api/logout`).
+- `GET /api/health` comprueba configuración, sesión y disponibilidad de Hermes.
 - `POST /api/chat` crea/reutiliza sesión y envía mensajes con modelo y esfuerzo.
+- `POST /api/audio` recibe audio grabado, lo transcribe y lo envía a Hermes.
+- `GET /api/voice` reserva el canal separado de voz en vivo.
+- El frontend usa el backend real; ya no hay respuestas demo.
+- Selector de modelo y esfuerzo dentro de cada conversación.
 - El backend permanece **cerrado por defecto** hasta configurar autenticación propia.
 
 El almacenamiento local sigue siendo temporal: todavía no sustituye una cuenta ni una base de datos compartida.
@@ -34,12 +38,15 @@ La capa `api/` usa estas variables exclusivamente en el servidor de Vercel:
 
 - `HERMES_CLOUD_URL`: URL base del gateway Hermes Cloud.
 - `HERMES_CLOUD_API_KEY`: clave Bearer del API server de Hermes. Nunca se coloca en `app.js`.
-- `AGENT_HUB_ACCESS_TOKEN`: control temporal para impedir que `/api/chat` sea un proxy público.
+- `AGENT_HUB_PASSWORD`: contraseña privada de acceso a Agent Hub.
+- `AGENT_HUB_SESSION_SECRET`: secreto de firma de cookies, mínimo 32 caracteres.
+- `OPENAI_API_KEY`: necesaria solo para transcribir audio en `/api/audio`.
+- `AGENT_HUB_ACCESS_TOKEN`: opcional, reserva para automatismos; el acceso normal usa cookie.
 
-No debes enviarme ni pegar aquí ninguno de esos valores. Se configurarían directamente como variables privadas en Vercel cuando decidamos el mecanismo de login de Agent Hub.
+No debes enviarme ni pegar aquí ninguno de esos valores. Se configurarían directamente como variables privadas en Vercel cuando decidas activar el acceso.
 
-El siguiente paso funcional es sustituir el control temporal por autenticación propia con cookie segura y conectar el frontend a `/api/chat`. Hasta entonces, el endpoint no acepta mensajes, por diseño.
+Hasta que configures esas variables, los endpoints devuelven `503 backend_not_configured` o `401 unauthorized`, por diseño.
 
-## Próxima fase: audio y sincronización
+## Próxima fase: sincronización y voz en vivo
 
-El audio grabado se añadirá como otra ruta backend (`/api/audio`) y no se conectará directamente desde la PWA a Hermes. La voz en vivo usará posteriormente un canal de streaming separado, preferiblemente WebRTC o WebSocket, sin mezclarlo con el endpoint de mensajes.
+El audio grabado ya entra por `/api/audio`. La voz en vivo usará un canal separado (`/api/voice` como reserva + servidor realtime dedicado con WebRTC/WebSocket), sin mezclarlo con el endpoint de mensajes.

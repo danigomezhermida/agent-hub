@@ -1,4 +1,5 @@
-const { json, authorize, validateRuntime, hermes } = require('./_lib/hermes');
+const { json, validateRuntime, buildRuntime, hermes, ensureSessionId } = require('./_lib/hermes');
+const { isAuthenticated } = require('./_lib/auth');
 
 function safeError(error) {
   if (error.code === 'upstream_not_configured') {
@@ -13,17 +14,25 @@ function safeError(error) {
   return json(502, { error: 'hermes_upstream_unavailable', message: 'Hermes Cloud is unavailable.' });
 }
 
+function extractAssistantText(result) {
+  const message = result?.message;
+  if (typeof message === 'string') return message;
+  if (message && typeof message.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) {
+    return message.content.filter((part) => part && typeof part.text === 'string').map((part) => part.text).join('\n');
+  }
+  if (typeof result?.text === 'string') return result.text;
+  if (typeof result?.reply === 'string') return result.reply;
+  return '';
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('allow', 'POST');
     return res.status(405).json({ error: 'method_not_allowed' });
   }
-
-  const authError = authorize(req);
-  if (authError) {
-    res.status(authError.status);
-    Object.entries(authError.headers).forEach(([key, value]) => res.setHeader(key, value));
-    return res.end(authError.body);
+  if (!isAuthenticated(req)) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Login required.' });
   }
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -34,24 +43,10 @@ module.exports = async function handler(req, res) {
   const runtimeError = validateRuntime(body);
   if (runtimeError) return res.status(400).json({ error: 'invalid_runtime', message: runtimeError });
 
-  const effort = body.effort || 'medium';
-  const model = body.model || undefined;
-  const runtime = {
-    ...(model ? { model } : {}),
-    model_options: { reasoning: { enabled: effort !== 'none', ...(effort !== 'none' ? { effort } : {}) } },
-    require_model_lock: Boolean(model),
-    source: 'agent-hub',
-  };
-
+  const runtime = buildRuntime(body);
   try {
-    let sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
-    if (!sessionId) {
-      const created = await hermes('/api/sessions', {
-        method: 'POST',
-        body: JSON.stringify({ ...runtime, title: 'Agent Hub' }),
-      });
-      sessionId = created?.session?.id || created?.id || created?.session_id || '';
-    }
+    const requestedSession = typeof body.sessionId === 'string' ? body.sessionId.trim().slice(0, 256) : '';
+    const sessionId = await ensureSessionId(requestedSession, runtime);
     if (!sessionId) throw new Error('Hermes did not return a session id.');
 
     const result = await hermes(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
@@ -61,7 +56,7 @@ module.exports = async function handler(req, res) {
 
     return res.status(200).json({
       sessionId,
-      message: result?.message || { role: 'assistant', content: '' },
+      text: extractAssistantText(result),
       runtime: result?.runtime || null,
       usage: result?.usage || null,
     });
