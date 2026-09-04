@@ -37,3 +37,11 @@
   .dialog-card{width:100%;max-width:none;max-height:80svh;border-radius:18px;padding:22px 16px calc(18px + env(safe-area-inset-bottom));overflow:auto}
 }
 @media (min-width:761px){.mobile-new-chat{display:none}}
+@media (max-width:760px){
+  .chat-overlay{padding:0;align-items:stretch;overflow:hidden}
+  .chat-overlay.open{display:flex}
+  .chat-window{width:100%;height:100dvh;min-height:100dvh;max-height:none;border-radius:0;display:flex;flex-direction:column}
+  .chat-window .message-list{flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
+  .chat-window .composer{position:fixed;left:0;right:0;bottom:var(--keyboard-offset,0px);z-index:20;flex:none;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:var(--card)}
+  .chat-window .composer input{min-width:0;font-size:16px}
+}

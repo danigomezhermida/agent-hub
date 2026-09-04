@@ -22,6 +22,17 @@ const strip = document.querySelector('#groupsStrip');
 const toast = document.querySelector('#toast');
 const overlay = document.querySelector('#chatOverlay');
 const dialog = document.querySelector('#simpleDialog');
+
+function syncKeyboardViewport() {
+  if (!window.visualViewport) return;
+  const keyboardOffset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+  document.documentElement.style.setProperty('--keyboard-offset', `${keyboardOffset}px`);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncKeyboardViewport);
+  window.visualViewport.addEventListener('scroll', syncKeyboardViewport);
+  syncKeyboardViewport();
+}
 const messageList = document.querySelector('#messageList');
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[match]));
 const save = () => { localStorage.setItem(storage.chats, JSON.stringify(chats)); localStorage.setItem(storage.groups, JSON.stringify(groups)); localStorage.setItem(storage.messages, JSON.stringify(messages)); localStorage.setItem(storage.model, selectedModel); };
