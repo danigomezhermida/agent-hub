@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f5f3ef" />
+  <title>Agent Hub · Limpatex</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Navegación principal">
+      <div class="brand"><div class="brand-mark">A</div><div><strong>Agent Hub</strong><span>tu sala de agentes</span></div></div>
+      <button class="new-chat" id="newChatBtn"><span>＋</span> Nuevo chat <kbd>N</kbd></button>
+      <div class="nav-section"><p class="eyebrow">Espacios</p><button class="nav-item active"><span>◈</span> Todos los chats <b id="chatCount">4</b></button><button class="nav-item" id="groupsNav"><span>✣</span> Grupos <b>3</b></button><button class="nav-item"><span>⌁</span> Favoritos</button></div>
+      <div class="nav-section agent-list"><p class="eyebrow">Mis agentes</p><button class="agent-row"><i class="agent-avatar purple">D</i><span>Dani · Director</span><em>activo</em></button><button class="agent-row"><i class="agent-avatar blue">S</i><span>Senior Dev</span><em>listo</em></button><button class="agent-row"><i class="agent-avatar orange">Q</i><span>QA Limpatex</span><em>listo</em></button><button class="agent-row"><i class="agent-avatar green">O</i><span>Operaciones</span><em>listo</em></button></div>
+      <div class="sidebar-bottom"><button class="nav-item"><span>⚙</span> Ajustes</button><div class="connection"><i></i><span><strong>Consola local</strong><small>sin conectar todavía</small></span><button aria-label="Configurar conexión">···</button></div></div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar"><div class="mobile-brand"><div class="brand-mark">A</div><strong>Agent Hub</strong></div><div class="breadcrumb"><span>Todos los chats</span><span class="slash">/</span><strong id="topTitle">Resumen de agentes</strong></div><div class="top-actions"><button class="icon-btn" aria-label="Buscar" id="focusSearch">⌕</button><button class="icon-btn" aria-label="Notificaciones">♧</button><div class="user-chip">D</div></div></header>
+      <section class="content">
+        <div class="welcome"><div><p class="kicker">VIERNES, 4 DE SEPTIEMBRE</p><h1>Tu centro de mando<br><i>para conversar.</i></h1><p class="subhead">Un lugar sencillo para abrir chats, elegir agente y coordinar grupos sin entrar en la consola.</p></div><div class="overview-card"><span class="live-dot"></span><div><strong>Tu flota está tranquila</strong><small>4 agentes disponibles · 0 trabajando</small></div><span class="sun">☼</span></div></div>
+        <div class="toolbar"><div class="search"><span>⌕</span><input id="searchInput" placeholder="Buscar chats o agentes" aria-label="Buscar chats o agentes" /></div><button class="filter active-filter">Recientes <span>⌄</span></button><button class="filter" id="groupFilter">Grupos <span>⌄</span></button></div>
+        <div class="section-heading"><div><p class="kicker">CONTINUAR</p><h2>Tus conversaciones</h2></div><button class="text-btn" id="viewAll">Ver todas <span>→</span></button></div>
+        <div class="chat-grid" id="chatGrid"></div>
+        <div class="section-heading group-heading"><div><p class="kicker">COORDINACIÓN</p><h2>Grupos de agentes</h2></div><button class="text-btn" id="newGroupBtn">Crear grupo <span>＋</span></button></div>
+        <div class="groups-strip" id="groupsStrip"></div>
+      </section>
+    </main>
+
+    <aside class="detail-panel" id="detailPanel" aria-label="Vista rápida del chat"><div class="detail-top"><span class="kicker">CHAT SELECCIONADO</span><button class="close-detail" id="closeDetail" aria-label="Cerrar detalle">×</button></div><div class="detail-agent"><i class="large-avatar purple">D</i><div><h3 id="detailTitle">Plan de Agent Hub</h3><p id="detailMeta">Dani · Director</p></div></div><div class="mini-line"><span class="live-dot"></span> Disponible ahora</div><div class="detail-divider"></div><p class="detail-label">Participantes</p><div class="participants" id="participants"><span class="stack purple">D</span><span class="stack blue">S</span><span class="stack orange">Q</span><span class="participant-count">+1</span></div><p class="detail-label">Modelo</p><button class="model-select" id="modelSelect">gpt-5.6-luna <span>⌄</span></button><div class="model-menu" id="modelMenu"><button>gpt-5.6-luna <small>Recomendado</small></button><button>claude-opus <small>Razonamiento</small></button><button>gpt-4.1-mini <small>Rápido</small></button></div><button class="open-chat" id="openChatBtn">Abrir conversación <span>→</span></button><div class="detail-note">La conexión con tu consola se añadirá aquí cuando elijas dónde alojar Agent Hub.</div></aside>
+  </div>
+  <div class="chat-overlay" id="chatOverlay" aria-hidden="true"><div class="chat-window"><header><div><span class="kicker">CONVERSACIÓN</span><h2 id="chatWindowTitle">Plan de Agent Hub</h2></div><button class="close-window" id="closeChat" aria-label="Cerrar conversación">×</button></header><div class="message-list" id="messageList"><div class="message agent"><span class="message-avatar">D</span><div><small>Dani · Director</small><p>¿En qué quieres que trabajemos?</p></div></div></div><form class="composer" id="composer"><input id="messageInput" placeholder="Escribe un mensaje…" autocomplete="off" /><button aria-label="Enviar mensaje">↑</button></form></div></div>
+  <div class="simple-dialog" id="simpleDialog" aria-hidden="true"><div class="dialog-card"><button class="close-window" id="closeDialog" aria-label="Cerrar">×</button><span class="kicker" id="dialogKicker">NUEVO CHAT</span><h2 id="dialogTitle">¿Con quién quieres hablar?</h2><div class="choice-list" id="choiceList"></div></div></div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
