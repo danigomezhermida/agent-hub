@@ -77,9 +77,14 @@ function openChat(chat) {
   renderMessages(chat);
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
-  // En móvil no hacemos focus automático: evita que Safari/Chrome
-  // abra el teclado y desplace la cabecera fuera de la pantalla.
+  document.body.classList.add('chat-open');
+  // En móvil dejamos que el usuario decida cuándo abrir el teclado.
   if (!window.matchMedia('(max-width: 760px)').matches) document.querySelector('#messageInput').focus();
+}
+function closeChat() {
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('chat-open');
 }
 function openDialog(kicker, title, choices, onChoice = null) {
   document.querySelector('#dialogKicker').textContent = kicker;
@@ -114,9 +119,9 @@ document.querySelector('#groupsNav').addEventListener('click', () => { document.
 document.querySelector('#viewAll').addEventListener('click', () => showToast(`Tienes ${chats.length} conversaciones guardadas`));
 document.querySelector('#focusSearch').addEventListener('click', () => document.querySelector('#searchInput').focus());
 document.querySelector('#openChatBtn').addEventListener('click', () => openChat(chats[selectedIndex] || chats[0]));
-document.querySelector('#closeChat').addEventListener('click', () => { overlay.classList.remove('open'); overlay.setAttribute('aria-hidden', 'true'); });
+document.querySelector('#closeChat').addEventListener('click', closeChat);
 document.querySelector('#closeDialog').addEventListener('click', closeDialog);
-overlay.addEventListener('click', (event) => { if (event.target === overlay) document.querySelector('#closeChat').click(); });
+overlay.addEventListener('click', (event) => { if (event.target === overlay) closeChat(); });
 dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(); });
 document.querySelector('#composer').addEventListener('submit', (event) => { event.preventDefault(); const input = document.querySelector('#messageInput'); const text = input.value.trim(); const chat = chats[selectedIndex]; if (!text || !chat) return; if (!messages[chat.title]) messages[chat.title] = [{ role: 'agent', author: 'Dani · Director', text: '¿En qué quieres que trabajemos?' }]; messages[chat.title].push({ role: 'user', text }); save(); renderMessages(chat); input.value = ''; showToast('Mensaje guardado en este dispositivo; falta conectar Hermes'); });
 document.querySelector('#modelSelect').addEventListener('click', () => document.querySelector('#modelMenu').classList.toggle('open'));

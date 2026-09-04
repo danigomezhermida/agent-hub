@@ -50,3 +50,11 @@
   .chat-window{height:var(--app-height,100dvh);min-height:0}
   .chat-window .composer{position:absolute;bottom:0;left:0;right:0}
 }
+body.chat-open{overflow:hidden}
+@media (max-width:760px){
+  .chat-overlay{display:flex;visibility:hidden;pointer-events:none;background:var(--paper);transform:translateX(100%);transition:transform .28s ease,visibility 0s linear .28s}
+  .chat-overlay.open{display:flex;visibility:visible;pointer-events:auto;transform:translateX(0);transition:transform .28s ease}
+  .chat-window{background:var(--paper);box-shadow:none}
+  .chat-window .close-window{font-size:0;width:34px;height:34px;display:grid;place-items:center}
+  .chat-window .close-window::before{content:'‹';font-size:38px;line-height:28px;color:var(--muted)}
+}
