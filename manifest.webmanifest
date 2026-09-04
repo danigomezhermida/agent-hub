@@ -1,0 +1,11 @@
+{
+  "name": "Agent Hub · Limpatex",
+  "short_name": "Agent Hub",
+  "description": "Sala móvil para conversar con agentes de Limpatex",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f7f5f1",
+  "theme_color": "#310984",
+  "lang": "es",
+  "icons": []
+}
