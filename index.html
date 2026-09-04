@@ -2,44 +2,144 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#310984" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#16181d" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="Agent Hub de Limpatex: conversa con tus agentes Hermes desde móvil o PC, con chat, grupos, audio y control de modelo." />
   <link rel="manifest" href="manifest.webmanifest" />
-  <title>Agent Hub · Limpatex</title>
-  <link rel="stylesheet" href="styles.css?v=20260904-8" />
+  <title>Agent Hub · Conversa con tus agentes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=20260904-9" />
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"WebApplication","name":"Agent Hub Limpatex","applicationCategory":"BusinessApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0"}}
+  </script>
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar" aria-label="Navegación principal">
-      <div class="brand"><div class="brand-mark">A</div><div><strong>Agent Hub</strong><span>tu sala de agentes</span></div></div>
-      <button class="new-chat" id="newChatBtn"><span>＋</span> Nuevo chat <kbd>N</kbd></button>
-      <div class="nav-section"><p class="eyebrow">Espacios</p><button class="nav-item active"><span>◈</span> Todos los chats <b id="chatCount">4</b></button><button class="nav-item" id="groupsNav"><span>✣</span> Grupos <b>3</b></button><button class="nav-item"><span>⌁</span> Favoritos</button></div>
-      <div class="nav-section agent-list"><p class="eyebrow">Mis agentes</p><button class="agent-row"><i class="agent-avatar purple">D</i><span>Dani · Director</span><em>activo</em></button><button class="agent-row"><i class="agent-avatar blue">S</i><span>Senior Dev</span><em>listo</em></button><button class="agent-row"><i class="agent-avatar orange">Q</i><span>QA Limpatex</span><em>listo</em></button><button class="agent-row"><i class="agent-avatar green">O</i><span>Operaciones</span><em>listo</em></button></div>
-      <div class="sidebar-bottom"><button class="nav-item"><span>⚙</span> Ajustes</button><div class="connection"><i></i><span><strong>Consola local</strong><small>sin conectar todavía</small></span><button aria-label="Configurar conexión">···</button></div></div>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Historial de conversaciones">
+      <div class="side-top">
+        <button class="side-icon" id="collapseSidebar" aria-label="Ocultar barra lateral">☰</button>
+        <button class="side-icon" id="sidebarSearchBtn" aria-label="Buscar chats">⌕</button>
+        <div class="brand-mini" aria-hidden="true">A</div>
+      </div>
+      <button class="new-chat-side" id="newChatBtn"><span class="pencil" aria-hidden="true">✎</span> Nuevo chat</button>
+      <div class="side-search" id="sideSearchWrap">
+        <span aria-hidden="true">⌕</span>
+        <input id="searchInput" placeholder="Buscar" aria-label="Buscar chats o agentes" autocomplete="off" />
+      </div>
+      <nav class="side-scroll">
+        <p class="side-label">Chats</p>
+        <ul class="chat-list" id="chatList"></ul>
+        <p class="side-label">Grupos</p>
+        <ul class="chat-list" id="groupList"></ul>
+        <button class="side-link" id="newGroupBtn">＋ Crear grupo</button>
+      </nav>
+      <div class="side-bottom">
+        <div class="conn" id="connBox"><span class="conn-dot" id="connDot"></span><span id="connText">Comprobando…</span></div>
+        <div class="user-row">
+          <span class="user-avatar">D</span>
+          <span class="user-name">Dani</span>
+          <button class="side-icon" id="logoutBtn" aria-label="Cerrar sesión">⏻</button>
+        </div>
+      </div>
     </aside>
+    <div class="scrim" id="scrim"></div>
 
-    <main class="main-panel">
-      <header class="topbar"><div class="mobile-brand"><div class="brand-mark">A</div><strong>Agent Hub</strong></div><div class="breadcrumb"><span>Todos los chats</span><span class="slash">/</span><strong id="topTitle">Resumen de agentes</strong></div><div class="top-actions"><button class="icon-btn" aria-label="Buscar" id="focusSearch">⌕</button><button class="icon-btn" aria-label="Notificaciones">♧</button><div class="user-chip">D</div></div></header>
-      <button class="mobile-new-chat" id="mobileNewChatBtn"><span>＋</span> Nuevo chat</button>
-      <section class="content">
-        <div class="welcome"><div><p class="kicker">VIERNES, 4 DE SEPTIEMBRE</p><h1>Tu centro de mando<br><i>para conversar.</i></h1><p class="subhead">Un lugar sencillo para abrir chats, elegir agente y coordinar grupos sin entrar en la consola.</p></div><div class="overview-card"><span class="live-dot"></span><div><strong>Tu flota está tranquila</strong><small>4 agentes disponibles · 0 trabajando</small></div><span class="sun">☼</span></div></div>
-        <div class="toolbar"><div class="search"><span>⌕</span><input id="searchInput" placeholder="Buscar chats o agentes" aria-label="Buscar chats o agentes" /></div><button class="filter active-filter">Recientes <span>⌄</span></button><button class="filter" id="groupFilter">Grupos <span>⌄</span></button></div>
-        <div class="section-heading"><div><p class="kicker">CONTINUAR</p><h2>Tus conversaciones</h2></div><button class="text-btn" id="viewAll">Ver todas <span>→</span></button></div>
-        <div class="chat-grid" id="chatGrid"></div>
-        <div class="section-heading group-heading"><div><p class="kicker">COORDINACIÓN</p><h2>Grupos de agentes</h2></div><button class="text-btn" id="newGroupBtn">Crear grupo <span>＋</span></button></div>
-        <div class="groups-strip" id="groupsStrip"></div>
+    <main class="main">
+      <header class="mobile-bar">
+        <button class="side-icon" id="openSidebar" aria-label="Abrir menú">☰</button>
+        <span class="mobile-title">Agent Hub</span>
+        <button class="side-icon" id="mobileNewChatBtn" aria-label="Nuevo chat">✎</button>
+      </header>
+
+      <section class="home" id="viewHome" aria-label="Inicio">
+        <h1 class="wordmark">Agent Hub</h1>
+        <p class="greeting" id="greeting">¿En qué trabajamos hoy?</p>
+        <div class="composer composer-hero">
+          <textarea id="heroInput" rows="1" placeholder="Pregunta lo que sea" aria-label="Escribir mensaje nuevo"></textarea>
+          <div class="composer-bar">
+            <div class="composer-tools">
+              <button class="tool-btn" id="heroMicBtn" aria-label="Enviar audio">◉</button>
+              <button class="model-pill" id="modelPill">gpt-5.6-luna <span aria-hidden="true">⌄</span></button>
+              <button class="model-pill" id="effortPill">medium <span aria-hidden="true">⌄</span></button>
+            </div>
+            <div class="composer-send">
+              <button class="tool-btn" id="heroVoiceBtn" aria-label="Voz en vivo">≋</button>
+              <button class="send-btn" id="heroSendBtn" aria-label="Enviar mensaje">↑</button>
+            </div>
+          </div>
+        </div>
+        <div class="chips" id="chips"></div>
+        <div class="fleet" id="fleet"></div>
+      </section>
+
+      <section class="thread" id="viewChat" aria-label="Conversación" hidden>
+        <header class="thread-head">
+          <button class="side-icon only-mobile" id="backBtn" aria-label="Volver">‹</button>
+          <div class="thread-title">
+            <h2 id="chatWindowTitle">Conversación</h2>
+            <span class="backend-state" id="backendState">comprobando…</span>
+          </div>
+          <div class="thread-actions">
+            <button class="model-pill" id="modelPillChat">gpt-5.6-luna <span aria-hidden="true">⌄</span></button>
+            <button class="model-pill" id="effortPillChat">medium <span aria-hidden="true">⌄</span></button>
+            <button class="side-icon" id="chatNewBtn" aria-label="Nuevo chat">✎</button>
+          </div>
+        </header>
+        <div class="message-list" id="messageList" role="log" aria-live="polite"></div>
+        <div class="composer composer-thread">
+          <textarea id="messageInput" rows="1" placeholder="Pregunta lo que sea" aria-label="Escribir mensaje" autocomplete="off"></textarea>
+          <div class="composer-bar">
+            <div class="composer-tools">
+              <button class="tool-btn" id="micBtn" aria-label="Enviar audio">◉</button>
+            </div>
+            <div class="composer-send">
+              <button class="tool-btn" id="voiceBtn" aria-label="Voz en vivo">≋</button>
+              <button class="send-btn" id="sendBtn" aria-label="Enviar mensaje">↑</button>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
-
-    <aside class="detail-panel" id="detailPanel" aria-label="Vista rápida del chat"><div class="detail-top"><span class="kicker">CHAT SELECCIONADO</span><button class="close-detail" id="closeDetail" aria-label="Cerrar detalle">×</button></div><div class="detail-agent"><i class="large-avatar purple">D</i><div><h3 id="detailTitle">Plan de Agent Hub</h3><p id="detailMeta">Dani · Director</p></div></div><div class="mini-line"><span class="live-dot"></span> Disponible ahora</div><div class="detail-divider"></div><p class="detail-label">Participantes</p><div class="participants" id="participants"><span class="stack purple">D</span><span class="stack blue">S</span><span class="stack orange">Q</span><span class="participant-count">+1</span></div><p class="detail-label">Modelo</p><button class="model-select" id="modelSelect">gpt-5.6-luna <span>⌄</span></button><div class="model-menu" id="modelMenu"><button>gpt-5.6-luna <small>Recomendado</small></button><button>claude-opus <small>Razonamiento</small></button><button>gpt-4.1-mini <small>Rápido</small></button></div><button class="open-chat" id="openChatBtn">Abrir conversación <span>→</span></button><div class="detail-note">La conexión con tu consola se añadirá aquí cuando elijas dónde alojar Agent Hub.</div></aside>
   </div>
-  <div class="chat-overlay" id="chatOverlay" aria-hidden="true"><div class="chat-window"><header><div><span class="kicker">CONVERSACIÓN</span><h2 id="chatWindowTitle">Plan de Agent Hub</h2><div class="runtime-controls"><label>Modelo <select id="modelPicker"><option value="gpt-5.6-luna">gpt-5.6-luna</option><option value="claude-opus">claude-opus</option><option value="gpt-4.1-mini">gpt-4.1-mini</option></select></label><label>Esfuerzo <select id="effortPicker"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></label><span class="backend-state" id="backendState">comprobando…</span></div></div><div class="chat-header-actions"><button class="chat-new-shortcut" id="chatNewBtn">＋ Nuevo</button><button class="close-window" id="closeChat" aria-label="Cerrar conversación">×</button></div></header><div class="message-list" id="messageList"><div class="message agent"><span class="message-avatar">D</span><div><small>Dani · Director</small><p>Inicia sesión para conversar con Hermes Cloud.</p></div></div></div><form class="composer" id="composer"><button type="button" class="mic-btn" id="micBtn" aria-label="Enviar audio">◉</button><input id="messageInput" placeholder="Escribe un mensaje…" autocomplete="off" /><button aria-label="Enviar mensaje">↑</button><button type="button" class="mic-btn" id="voiceBtn" aria-label="Voz en vivo">≋</button></form></div></div>
-  <div class="login-overlay" id="loginOverlay" aria-hidden="true"><div class="login-card"><span class="kicker">AGENT HUB</span><h2>Iniciar sesión</h2><p>Acceso privado de Dani. La contraseña se configura como variable privada en Vercel.</p><form id="loginForm"><input id="loginPassword" type="password" placeholder="Contraseña" autocomplete="current-password" /><button>Iniciar sesión</button></form><p class="login-status" id="loginStatus"></p></div></div>
-  <div class="simple-dialog" id="simpleDialog" aria-hidden="true"><div class="dialog-card"><button class="close-window" id="closeDialog" aria-label="Cerrar">×</button><span class="kicker" id="dialogKicker">NUEVO CHAT</span><h2 id="dialogTitle">¿Con quién quieres hablar?</h2><div class="choice-list" id="choiceList"></div></div></div>
+
+  <div class="menu-pop" id="modelMenu" hidden>
+    <button data-model="gpt-5.6-luna">gpt-5.6-luna <small>Recomendado</small></button>
+    <button data-model="claude-opus">claude-opus <small>Razonamiento</small></button>
+    <button data-model="gpt-4.1-mini">gpt-4.1-mini <small>Rápido</small></button>
+  </div>
+  <div class="menu-pop" id="effortMenu" hidden>
+    <button data-effort="low">low</button>
+    <button data-effort="medium">medium</button>
+    <button data-effort="high">high</button>
+  </div>
+
+  <div class="login-overlay" id="loginOverlay" aria-hidden="true">
+    <div class="login-card">
+      <div class="login-mark" aria-hidden="true">A</div>
+      <h2>Iniciar sesión</h2>
+      <p>Acceso privado de Dani. La contraseña vive como variable privada en Vercel.</p>
+      <form id="loginForm">
+        <input id="loginPassword" type="password" placeholder="Contraseña" autocomplete="current-password" aria-label="Contraseña" />
+        <button>Iniciar sesión</button>
+      </form>
+      <p class="login-status" id="loginStatus" role="status"></p>
+    </div>
+  </div>
+
+  <div class="simple-dialog" id="simpleDialog" aria-hidden="true">
+    <div class="dialog-card">
+      <button class="close-window" id="closeDialog" aria-label="Cerrar">×</button>
+      <span class="kicker" id="dialogKicker">NUEVO CHAT</span>
+      <h2 id="dialogTitle">¿Con quién quieres hablar?</h2>
+      <div class="choice-list" id="choiceList"></div>
+    </div>
+  </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="app.js?v=20260904-8"></script>
+  <script src="app.js?v=20260904-9"></script>
 </body>
 </html>

@@ -1,19 +1,24 @@
 const seedChats = [
-  { title: 'Plan de Agent Hub', desc: 'Diseño de la nueva sala de agentes', time: 'Ahora', icon: '✦', tone: 'purple', agents: ['D', 'S', 'Q'], status: 'Activo' },
-  { title: 'Revisión app de gestión', desc: 'Comprobando el flujo de asignaciones', time: 'Ayer', icon: '▦', tone: 'blue', agents: ['S', 'Q'], status: 'Listo' },
-  { title: 'Operativa de septiembre', desc: 'Planificación y prioridades de hoy', time: 'Ayer', icon: '⌁', tone: 'green', agents: ['O', 'D'], status: 'Listo' },
-  { title: 'Ideas para SATUA', desc: 'Servicios y experiencia hospitality', time: '2 sep', icon: '✣', tone: 'orange', agents: ['D'], status: 'Listo' }
+  { title: 'Plan de Agent Hub', desc: 'Diseño de la nueva sala de agentes', time: 'Ahora', agents: ['D', 'S', 'Q'], status: 'Activo' },
+  { title: 'Revisión app de gestión', desc: 'Comprobando el flujo de asignaciones', time: 'Ayer', agents: ['S', 'Q'], status: 'Listo' },
+  { title: 'Operativa de septiembre', desc: 'Planificación y prioridades de hoy', time: 'Ayer', agents: ['O', 'D'], status: 'Listo' },
+  { title: 'Ideas para SATUA', desc: 'Servicios y experiencia hospitality', time: '2 sep', agents: ['D'], status: 'Listo' }
 ];
 const seedGroups = [
-  { name: 'Dirección + Desarrollo', desc: '3 agentes · coordinación', agents: ['D', 'S', 'Q'] },
-  { name: 'Limpatex Operaciones', desc: '2 agentes · operativo', agents: ['O', 'D'] },
-  { name: 'Equipo de calidad', desc: '2 agentes · revisión', agents: ['Q', 'S'] }
+  { name: 'Dirección + Desarrollo', desc: '3 agentes', agents: ['D', 'S', 'Q'] },
+  { name: 'Limpatex Operaciones', desc: '2 agentes', agents: ['O', 'D'] },
+  { name: 'Equipo de calidad', desc: '2 agentes', agents: ['Q', 'S'] }
 ];
 const agents = ['Dani · Director', 'Senior Dev', 'QA Limpatex', 'Operaciones'];
 const MODELS = ['gpt-5.6-luna', 'claude-opus', 'gpt-4.1-mini'];
 const EFFORTS = ['low', 'medium', 'high'];
+const MODEL_LABEL = { 'gpt-5.6-luna': 'gpt-5.6-luna', 'claude-opus': 'claude-opus', 'gpt-4.1-mini': 'gpt-4.1-mini' };
 const storage = { chats: 'agenthub.chats.v1', groups: 'agenthub.groups.v1', messages: 'agenthub.messages.v2', model: 'agenthub.model.v1', effort: 'agenthub.effort.v1', sessions: 'agenthub.sessions.v1' };
 const read = (key, fallback) => { try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) ?? fallback) : fallback; } catch { return fallback; } };
+const $ = (id) => document.querySelector(id);
+const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
+const isMobile = () => window.matchMedia('(max-width: 760px)').matches();
+
 let chats = read(storage.chats, seedChats);
 let groups = read(storage.groups, seedGroups);
 let messages = read(storage.messages, {});
@@ -23,38 +28,10 @@ let selectedEffort = localStorage.getItem(storage.effort) || 'medium';
 if (!MODELS.includes(selectedModel)) selectedModel = 'gpt-5.6-luna';
 if (!EFFORTS.includes(selectedEffort)) selectedEffort = 'medium';
 let selectedIndex = 0;
-let backendState = 'checking';
+let activeChat = null;
 let mediaRecorder = null;
 let recordingChunks = [];
 
-const grid = document.querySelector('#chatGrid');
-const strip = document.querySelector('#groupsStrip');
-const toast = document.querySelector('#toast');
-const overlay = document.querySelector('#chatOverlay');
-const dialog = document.querySelector('#simpleDialog');
-const messageList = document.querySelector('#messageList');
-const backendStateEl = document.querySelector('#backendState');
-const loginOverlay = document.querySelector('#loginOverlay');
-const loginStatus = document.querySelector('#loginStatus');
-const modelPicker = document.querySelector('#modelPicker');
-const effortPicker = document.querySelector('#effortPicker');
-const micBtn = document.querySelector('#micBtn');
-const voiceBtn = document.querySelector('#voiceBtn');
-
-function syncKeyboardViewport() {
-  if (!window.visualViewport) return;
-  const viewport = window.visualViewport;
-  const keyboardOffset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
-  document.documentElement.style.setProperty('--keyboard-offset', `${keyboardOffset}px`);
-  document.documentElement.style.setProperty('--app-height', `${viewport.height}px`);
-  document.documentElement.style.setProperty('--viewport-top', `${viewport.offsetTop}px`);
-}
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', syncKeyboardViewport);
-  window.visualViewport.addEventListener('scroll', syncKeyboardViewport);
-  syncKeyboardViewport();
-}
-const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[match]));
 const save = () => {
   localStorage.setItem(storage.chats, JSON.stringify(chats));
   localStorage.setItem(storage.groups, JSON.stringify(groups));
@@ -63,300 +40,283 @@ const save = () => {
   localStorage.setItem(storage.model, selectedModel);
   localStorage.setItem(storage.effort, selectedEffort);
 };
-const chatKey = (chat) => chat.title;
-const historyOf = (chat) => {
-  const key = chatKey(chat);
-  if (!messages[key]) messages[key] = [];
-  return messages[key];
-};
-const sessionOf = (chat) => sessions[chatKey(chat)] || '';
+const chatKey = (c) => c.title;
+const historyOf = (c) => { const k = chatKey(c); if (!messages[k]) messages[k] = []; return messages[k]; };
+const sessionOf = (c) => sessions[chatKey(c)] || '';
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: 'include',
-    headers: { 'content-type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
+  const res = await fetch(path, { credentials: 'include', headers: { 'content-type': 'application/json', ...(options.headers || {}) }, ...options });
   let data = null;
-  try { data = await response.json(); } catch { data = null; }
-  return { status: response.status, data };
+  try { data = await res.json(); } catch { data = null; }
+  return { status: res.status, data };
 }
+function showToast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => t.classList.remove('show'), 2400); }
 
+/* ---------- session / connection ---------- */
 async function refreshSession() {
   try {
     const { status, data } = await api('/api/me');
     if (status === 200 && data && data.authenticated) {
-      loginOverlay.classList.remove('open');
-      loginOverlay.setAttribute('aria-hidden', 'true');
-      setBackendState('ready');
+      $('#loginOverlay').classList.remove('open');
+      setConn(true, data.hermes === 'configured' ? 'Hermes listo' : 'Sesión iniciada');
+      try {
+        const h = await api('/api/health');
+        if (h.status === 200) setConn(true, 'Hermes listo');
+        else setConn(true, h.data && h.data.status === 'not_ready' ? 'Backend sin configurar' : 'Sesión iniciada');
+      } catch { /* keep */ }
       return true;
     }
-    if (data && data.loginConfigured === false) {
-      setBackendState('not_configured');
-      showLogin('Backend sin configurar: faltan variables privadas en Vercel.');
-      return false;
-    }
-    setBackendState('login');
-    showLogin('');
-    return false;
-  } catch {
-    setBackendState('offline');
-    return false;
-  }
+    if (data && data.loginConfigured === false) { setConn(false, 'Backend sin configurar'); showLogin('Backend sin configurar: faltan variables privadas en Vercel.'); return false; }
+    setConn(false, 'Requiere login'); showLogin(''); return false;
+  } catch { setConn(false, 'Sin conexión'); return false; }
+}
+function setConn(ok, text) {
+  const dot = $('#connDot'); if (dot) dot.className = 'conn-dot' + (ok ? ' ok' : text === 'Comprobando…' ? '' : ' bad');
+  const el = $('#connText'); if (el) el.textContent = text;
+  const bs = $('#backendState'); if (bs) bs.textContent = text.toLowerCase();
+}
+function showLogin(msg) {
+  $('#loginOverlay').classList.add('open');
+  if (msg) $('#loginStatus').textContent = msg;
 }
 
-function showLogin(message) {
-  loginOverlay.classList.add('open');
-  loginOverlay.setAttribute('aria-hidden', 'false');
-  if (message) loginStatus.textContent = message;
+/* ---------- lists ---------- */
+function renderLists(filter = '') {
+  const q = filter.toLowerCase();
+  const list = $('#chatList');
+  list.innerHTML = '';
+  chats.forEach((chat, i) => {
+    if (q && !`${chat.title} ${chat.desc}`.toLowerCase().includes(q)) return;
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.textContent = chat.title;
+    b.title = chat.desc || '';
+    if (chats[i] === activeChat) b.classList.add('active');
+    b.addEventListener('click', () => openChat(chat));
+    li.appendChild(b); list.appendChild(li);
+  });
+  const gl = $('#groupList');
+  gl.innerHTML = '';
+  groups.forEach((g) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.textContent = g.name;
+    b.addEventListener('click', () => openGroup(g));
+    li.appendChild(b); gl.appendChild(li);
+  });
+}
+function renderHome() {
+  const hour = new Date().getHours();
+  $('#greeting').textContent = hour < 13 ? 'Buenos días, Dani. ¿En qué trabajamos hoy?' : hour < 21 ? 'Buenas tardes, Dani. ¿En qué trabajamos hoy?' : 'Buenas noches, Dani. ¿En qué trabajamos hoy?';
+  $('#chips').innerHTML = '';
+  ['Plan de Agent Hub', 'Revisión app de gestión', 'Operativa de septiembre', 'Ideas para SATUA'].forEach((s) => {
+    const b = document.createElement('button');
+    b.textContent = s;
+    b.addEventListener('click', () => { $('#heroInput').value = `Trabajemos en: ${s}`; $('#heroInput').focus(); });
+    $('#chips').appendChild(b);
+  });
+  $('#fleet').innerHTML = `<span><b>${agents.length}</b> agentes</span><span><b>${groups.length}</b> grupos</span><span><b>${escapeHtml(selectedModel)}</b> · ${escapeHtml(selectedEffort)}</span>`;
+}
+function syncPills() {
+  ['#modelPill', '#modelPillChat'].forEach((s) => { const el = $(s); if (el) el.innerHTML = `${escapeHtml(selectedModel)} <span aria-hidden="true">⌄</span>`; });
+  ['#effortPill', '#effortPillChat'].forEach((s) => { const el = $(s); if (el) el.innerHTML = `${escapeHtml(selectedEffort)} <span aria-hidden="true">⌄</span>`; });
 }
 
-function setBackendState(state) {
-  backendState = state;
-  if (!backendStateEl) return;
-  backendStateEl.textContent = {
-    checking: 'comprobando…', ready: 'Hermes listo', login: 'requiere login',
-    not_configured: 'backend sin configurar', offline: 'sin conexión', busy: 'pensando…', recording: 'grabando…',
-  }[state] || state;
-}
-
-function render(list = chats) {
-  grid.innerHTML = list.map((chat) => {
-    const index = chats.indexOf(chat);
-    return `<article class="chat-card ${index === selectedIndex ? 'selected' : ''}" data-index="${index}"><div class="chat-card-top"><span class="chat-icon ${chat.tone}">${chat.icon}</span><span class="time">${escapeHtml(chat.time)}</span></div><h3>${escapeHtml(chat.title)}</h3><p>${escapeHtml(chat.desc)}</p><div class="card-footer"><div class="mini-avatars">${chat.agents.map((agent, i) => `<span class="${['purple', 'blue', 'orange', 'green'][i % 4]}">${escapeHtml(agent)}</span>`).join('')}</div><span class="status-label">${escapeHtml(chat.status)}</span></div></article>`;
-  }).join('');
-  grid.querySelectorAll('.chat-card').forEach((card) => card.addEventListener('click', () => selectChat(Number(card.dataset.index), true)));
-  document.querySelector('#chatCount').textContent = chats.length;
-}
-function renderGroups() {
-  strip.innerHTML = groups.map((group, index) => `<article class="group-card" data-group="${index}"><strong>${escapeHtml(group.name)}</strong><p>${escapeHtml(group.desc)}</p><div class="mini-avatars">${group.agents.map((agent, i) => `<span class="${['purple', 'blue', 'orange', 'green'][i % 4]}">${escapeHtml(agent)}</span>`).join('')}</div></article>`).join('');
-  strip.querySelectorAll('.group-card').forEach((card) => card.addEventListener('click', () => {
-    const group = groups[Number(card.dataset.group)];
-    openDialog('GRUPO DE AGENTES', `Abrir ${group.name}`, group.agents.map((agent) => agents.find((name) => name.startsWith(agent)) || agent));
-  }));
-}
-function renderMessages(chat) {
-  const history = historyOf(chat);
-  if (!history.length) {
-    messageList.innerHTML = `<div class="message agent"><span class="message-avatar">D</span><div><small>Hermes</small><p>Inicia sesión para conversar con Hermes Cloud.</p></div></div>`;
-    return;
-  }
-  messageList.innerHTML = history.map((message) => {
-    if (message.role === 'agent' || message.role === 'assistant') {
-      return `<div class="message agent"><span class="message-avatar">D</span><div><small>Hermes</small><p>${escapeHtml(message.text || '')}</p></div></div>`;
-    }
-    if (message.role === 'audio') {
-      const src = message.audioUrl ? ` controls src="${message.audioUrl}"` : '';
-      return `<div class="message user"><div><small>Tú · audio</small><p>${escapeHtml(message.text || 'Audio enviado')}</p>${message.audioUrl ? `<audio${src}></audio>` : ''}</div></div>`;
-    }
-    return `<div class="message user"><div><small>Tú</small><p>${escapeHtml(message.text || '')}</p></div></div>`;
-  }).join('');
-  messageList.scrollTop = messageList.scrollHeight;
-}
-function selectChat(index, open = false) {
-  if (!chats[index]) return;
-  selectedIndex = index;
-  const chat = chats[index];
-  document.querySelectorAll('.chat-card').forEach((card) => card.classList.toggle('selected', Number(card.dataset.index) === index));
-  document.querySelector('#detailTitle').textContent = chat.title;
-  document.querySelector('#detailMeta').textContent = `${chat.agents.join(' · ')} · conversación`;
-  document.querySelector('#topTitle').textContent = chat.title;
-  if (open) openChat(chat);
+/* ---------- views ---------- */
+function showHome() {
+  activeChat = null;
+  $('#viewChat').hidden = true;
+  const home = $('#viewHome'); home.hidden = false; home.style.display = '';
+  document.body.classList.remove('chat-open');
+  renderLists($('#searchInput').value); renderHome();
 }
 function openChat(chat) {
-  document.querySelector('#chatWindowTitle').textContent = chat.title;
-  renderMessages(chat);
-  overlay.classList.add('open');
-  overlay.setAttribute('aria-hidden', 'false');
+  activeChat = chat;
+  selectedIndex = Math.max(0, chats.indexOf(chat));
+  $('#viewHome').hidden = true;
+  const thread = $('#viewChat'); thread.hidden = false;
   document.body.classList.add('chat-open');
-  if (!window.matchMedia('(max-width: 760px)').matches) document.querySelector('#messageInput').focus();
+  $('#chatWindowTitle').textContent = chat.title;
+  renderMessages(chat); renderLists($('#searchInput').value);
+  document.body.classList.remove('side-open');
+  if (!isMobile()) $('#messageInput').focus();
 }
-function closeChat() {
-  if (mediaRecorder && mediaRecorder.state === 'recording') { try { mediaRecorder.stop(); } catch {} }
-  overlay.classList.remove('open');
-  overlay.setAttribute('aria-hidden', 'true');
-  document.body.classList.remove('chat-open');
+function openGroup(g) {
+  openDialog('GRUPO DE AGENTES', g.name, g.agents.map((a) => agents.find((n) => n.startsWith(a)) || a));
 }
-function openDialog(kicker, title, choices, onChoice = null) {
-  document.querySelector('#dialogKicker').textContent = kicker;
-  document.querySelector('#dialogTitle').textContent = title;
-  document.querySelector('#choiceList').innerHTML = choices.map((choice, index) => `<button data-choice="${index}"><span class="choice-avatar ${['purple', 'blue', 'orange', 'green'][index % 4]}">${escapeHtml(choice[0])}</span>${escapeHtml(choice)}<span>→</span></button>`).join('');
-  dialog.classList.add('open');
-  dialog.setAttribute('aria-hidden', 'false');
-  document.querySelectorAll('#choiceList button').forEach((button) => button.addEventListener('click', () => {
-    const choice = choices[Number(button.dataset.choice)];
-    closeDialog();
-    if (onChoice) onChoice(choice);
-    else showToast(`Preparado: ${choice}`);
-  }));
-}
-function closeDialog() { dialog.classList.remove('open'); dialog.setAttribute('aria-hidden', 'true'); }
-function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2400); }
-function createChat(agentName) {
-  const chat = { title: `Chat con ${agentName.split(' · ')[0]}`, desc: 'Conversación con Hermes Cloud', time: 'Ahora', icon: '✦', tone: 'purple', agents: [agentName[0]], status: 'Nuevo' };
-  chats.unshift(chat);
-  selectedIndex = 0;
-  save(); render(); selectChat(0, true);
-  showToast('Chat creado');
-}
+function closeChat() { showHome(); }
 
-async function sendText(text) {
-  const chat = chats[selectedIndex];
-  if (!text || !chat) return;
+/* ---------- messages ---------- */
+function renderMessages(chat) {
+  const box = $('#messageList');
   const history = historyOf(chat);
-  history.push({ role: 'user', text });
-  save(); renderMessages(chat);
-  setBackendState('busy');
-  messageList.insertAdjacentHTML('beforeend', `<div class="message agent" id="typingRow"><span class="message-avatar">D</span><div><small>Hermes</small><p><span class="typing">…</span></p></div></div>`);
-  messageList.scrollTop = messageList.scrollHeight;
+  if (!history.length) {
+    box.innerHTML = `<div class="msg-agent"><span class="who">HERMES</span>Inicia sesión para conversar con Hermes Cloud.</div>`;
+    return;
+  }
+  box.innerHTML = history.map((m) => {
+    if (m.role === 'assistant' || m.role === 'agent') return `<div class="msg-agent"><span class="who">HERMES</span>${escapeHtml(m.text || '')}</div>`;
+    if (m.role === 'audio') return `<div class="msg-user"><div>${escapeHtml(m.text || 'Audio enviado')}</div>${m.audioUrl ? `<div class="msg-audio"><audio controls src="${m.audioUrl}"></audio></div>` : ''}</div>`;
+    return `<div class="msg-user">${escapeHtml(m.text || '')}</div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+async function sendText(text) {
+  const chat = activeChat || chats[selectedIndex];
+  if (!text || !chat) return;
+  if (!activeChat) openChat(chat);
+  const history = historyOf(chat);
+  history.push({ role: 'user', text }); save(); renderMessages(chat);
+  setConn(true, 'Pensando…');
+  $('#messageList').insertAdjacentHTML('beforeend', `<div class="msg-agent" id="typingRow"><span class="who">HERMES</span><span class="typing-dots"><span>●</span> <span>●</span> <span>●</span></span></div>`);
+  $('#messageList').scrollTop = $('#messageList').scrollHeight;
   try {
-    const { status, data } = await api('/api/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message: text, sessionId: sessionOf(chat), model: selectedModel, effort: selectedEffort }),
-    });
+    const { status, data } = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message: text, sessionId: sessionOf(chat), model: selectedModel, effort: selectedEffort }) });
     document.querySelector('#typingRow')?.remove();
     if (status === 401) { history.push({ role: 'assistant', text: 'Necesitas iniciar sesión para continuar.' }); showLogin('Sesión caducada. Inicia sesión de nuevo.'); }
     else if (status === 503) history.push({ role: 'assistant', text: 'Backend sin configurar todavía en Vercel.' });
     else if (status !== 200) history.push({ role: 'assistant', text: 'Hermes no pudo responder ahora mismo.' });
-    else {
-      if (data && data.sessionId) sessions[chatKey(chat)] = data.sessionId;
-      history.push({ role: 'assistant', text: (data && data.text) || 'Sin respuesta.' });
-    }
-  } catch {
-    document.querySelector('#typingRow')?.remove();
-    history.push({ role: 'assistant', text: 'Sin conexión con el backend.' });
-  }
-  save(); renderMessages(chat); setBackendState('ready');
+    else { if (data && data.sessionId) sessions[chatKey(chat)] = data.sessionId; history.push({ role: 'assistant', text: (data && data.text) || 'Sin respuesta.' }); }
+  } catch { document.querySelector('#typingRow')?.remove(); history.push({ role: 'assistant', text: 'Sin conexión con el backend.' }); }
+  save(); renderMessages(chat); refreshSession();
 }
 
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function toggleRecording() {
-  const chat = chats[selectedIndex];
+/* ---------- audio ---------- */
+const blobToBase64 = (blob) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = reject; r.readAsDataURL(blob); });
+async function toggleRecording(btn) {
+  const chat = activeChat || chats[selectedIndex];
   if (!chat) return;
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop();
-    return;
-  }
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
-    showToast('Este navegador no permite grabar audio');
-    return;
-  }
+  if (mediaRecorder && mediaRecorder.state === 'recording') { mediaRecorder.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) { showToast('Este navegador no permite grabar audio'); return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     recordingChunks = [];
     mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (event) => { if (event.data.size) recordingChunks.push(event.data); };
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordingChunks.push(e.data); };
     mediaRecorder.onstop = async () => {
-      micBtn.classList.remove('recording');
-      setBackendState('ready');
-      stream.getTracks().forEach((track) => track.stop());
+      document.querySelectorAll('.tool-btn.recording').forEach((b) => b.classList.remove('recording'));
+      stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(recordingChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
       if (blob.size < 1000) { showToast('Grabación demasiado corta'); return; }
       await sendAudio(blob, chat);
     };
     mediaRecorder.start();
-    micBtn.classList.add('recording');
-    setBackendState('recording');
+    if (btn) btn.classList.add('recording');
     showToast('Grabando… pulsa de nuevo para enviar');
-  } catch {
-    showToast('Permiso de micrófono denegado');
-  }
+  } catch { showToast('Permiso de micrófono denegado'); }
 }
-
 async function sendAudio(blob, chat) {
+  if (!activeChat) openChat(chat);
   const history = historyOf(chat);
   const localUrl = URL.createObjectURL(blob);
   history.push({ role: 'audio', text: 'Audio enviado · transcribiendo…', audioUrl: localUrl });
-  save(); renderMessages(chat); setBackendState('busy');
+  save(); renderMessages(chat);
   try {
     const audioBase64 = await blobToBase64(blob);
-    const { status, data } = await api('/api/audio', {
-      method: 'POST',
-      body: JSON.stringify({ audioBase64, mimeType: blob.type, sessionId: sessionOf(chat), model: selectedModel, effort: selectedEffort }),
-    });
+    const { status, data } = await api('/api/audio', { method: 'POST', body: JSON.stringify({ audioBase64, mimeType: blob.type, sessionId: sessionOf(chat), model: selectedModel, effort: selectedEffort }) });
     if (status === 401) history.push({ role: 'assistant', text: 'Necesitas iniciar sesión para enviar audio.' });
     else if (status === 501) history.push({ role: 'assistant', text: 'Audio recibido, pero la transcripción aún no está configurada.' });
     else if (status !== 200) history.push({ role: 'assistant', text: 'No se pudo procesar el audio.' });
     else {
       if (data && data.sessionId) sessions[chatKey(chat)] = data.sessionId;
-      const audioMessage = [...history].reverse().find((item) => item.role === 'audio');
-      if (audioMessage && data && data.transcript) audioMessage.text = `Audio: ${data.transcript}`;
+      const audioMsg = [...history].reverse().find((i) => i.role === 'audio');
+      if (audioMsg && data && data.transcript) audioMsg.text = `Audio: ${data.transcript}`;
       history.push({ role: 'assistant', text: (data && data.text) || 'Audio transcrito sin respuesta.' });
     }
-  } catch {
-    history.push({ role: 'assistant', text: 'Sin conexión para enviar el audio.' });
-  }
-  save(); renderMessages(chat); setBackendState('ready');
+  } catch { history.push({ role: 'assistant', text: 'Sin conexión para enviar el audio.' }); }
+  save(); renderMessages(chat);
 }
-
-document.querySelector('#searchInput').addEventListener('input', (event) => { const query = event.target.value.toLowerCase(); render(chats.filter((chat) => `${chat.title} ${chat.desc}`.toLowerCase().includes(query))); });
-const startNewChat = () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar?', agents, createChat);
-document.querySelector('#newChatBtn').addEventListener('click', startNewChat);
-document.querySelector('#mobileNewChatBtn').addEventListener('click', startNewChat);
-document.querySelector('#chatNewBtn').addEventListener('click', startNewChat);
-document.querySelector('#newGroupBtn').addEventListener('click', () => openDialog('NUEVO GRUPO', 'Elige los agentes del grupo', agents, (agent) => { groups.unshift({ name: `Grupo con ${agent.split(' · ')[0]}`, desc: '1 agente · nuevo', agents: [agent[0]] }); save(); renderGroups(); showToast('Grupo creado y guardado en este dispositivo'); }));
-document.querySelector('#groupsNav').addEventListener('click', () => { document.querySelector('.group-heading').scrollIntoView({ behavior: 'smooth' }); showToast('Mostrando grupos de agentes'); });
-document.querySelector('#viewAll').addEventListener('click', () => showToast(`Tienes ${chats.length} conversaciones guardadas`));
-document.querySelector('#focusSearch').addEventListener('click', () => document.querySelector('#searchInput').focus());
-document.querySelector('#openChatBtn').addEventListener('click', () => openChat(chats[selectedIndex] || chats[0]));
-document.querySelector('#closeChat').addEventListener('click', closeChat);
-document.querySelector('#closeDialog').addEventListener('click', closeDialog);
-overlay.addEventListener('click', (event) => { if (event.target === overlay) closeChat(); });
-dialog.addEventListener('click', (event) => { if (event.target === dialog) closeDialog(); });
-document.querySelector('#composer').addEventListener('submit', (event) => {
-  event.preventDefault();
-  const input = document.querySelector('#messageInput');
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  sendText(text);
-});
-modelPicker.value = selectedModel;
-effortPicker.value = selectedEffort;
-modelPicker.addEventListener('change', () => { selectedModel = modelPicker.value; save(); showToast(`Modelo: ${selectedModel}`); });
-effortPicker.addEventListener('change', () => { selectedEffort = effortPicker.value; save(); showToast(`Esfuerzo: ${selectedEffort}`); });
-document.querySelector('#modelSelect').addEventListener('click', () => document.querySelector('#modelMenu').classList.toggle('open'));
-document.querySelectorAll('#modelMenu button').forEach((button) => button.addEventListener('click', () => {
-  const next = button.firstChild.textContent.trim();
-  if (MODELS.includes(next)) { selectedModel = next; modelPicker.value = next; save(); }
-  document.querySelector('#modelSelect').firstChild.textContent = `${selectedModel} `;
-  document.querySelector('#modelMenu').classList.remove('open');
-  showToast(`Modelo seleccionado: ${selectedModel}`);
-}));
-micBtn.addEventListener('click', toggleRecording);
-voiceBtn.addEventListener('click', async () => {
+async function voiceInfo() {
   try {
     const { status } = await api('/api/voice');
-    if (status === 401) { showLogin('Inicia sesión para usar la voz.'); return;
-    }
+    if (status === 401) { showLogin('Inicia sesión para usar la voz.'); return; }
     showToast('Voz en vivo: canal separado planificado, usa audio grabado por ahora');
   } catch { showToast('Sin conexión con el backend'); }
+}
+
+/* ---------- dialogs / menus ---------- */
+function openDialog(kicker, title, choices, onChoice = null) {
+  $('#dialogKicker').textContent = kicker;
+  $('#dialogTitle').textContent = title;
+  $('#choiceList').innerHTML = choices.map((c, i) => `<button data-choice="${i}"><span class="choice-avatar">${escapeHtml(c[0])}</span>${escapeHtml(c)}<span>→</span></button>`).join('');
+  $('#simpleDialog').classList.add('open');
+  document.querySelectorAll('#choiceList button').forEach((b) => b.addEventListener('click', () => {
+    const choice = choices[Number(b.dataset.choice)];
+    closeDialog();
+    if (onChoice) onChoice(choice);
+    else showToast(`Preparado: ${choice}`);
+  }));
+}
+function closeDialog() { $('#simpleDialog').classList.remove('open'); }
+function toggleMenu(menu, anchor) {
+  const m = $(menu);
+  const willOpen = m.hidden;
+  $('#modelMenu').hidden = true; $('#effortMenu').hidden = true;
+  if (!willOpen) return;
+  const r = anchor.getBoundingClientRect();
+  m.style.left = `${Math.min(r.left, window.innerWidth - 230)}px`;
+  m.style.top = `${r.bottom + 8}px`;
+  if (r.bottom > window.innerHeight - 220) m.style.top = `${Math.max(8, r.top - m.offsetHeight - 8)}px`;
+  m.hidden = false;
+}
+function createChat(agentName) {
+  const chat = { title: `Chat con ${agentName.split(' · ')[0]}`, desc: 'Conversación con Hermes Cloud', time: 'Ahora', agents: [agentName[0]], status: 'Nuevo' };
+  chats.unshift(chat); selectedIndex = 0; save(); openChat(chat); showToast('Chat creado');
+}
+function autoGrow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 200)}px`; }
+
+/* ---------- wiring ---------- */
+$('#searchInput').addEventListener('input', (e) => renderLists(e.target.value));
+const startNewChat = () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar?', agents, createChat);
+$('#newChatBtn').addEventListener('click', startNewChat);
+$('#mobileNewChatBtn').addEventListener('click', startNewChat);
+$('#chatNewBtn').addEventListener('click', startNewChat);
+$('#newGroupBtn').addEventListener('click', () => openDialog('NUEVO GRUPO', 'Elige los agentes del grupo', agents, (a) => { groups.unshift({ name: `Grupo con ${a.split(' · ')[0]}`, desc: '1 agente', agents: [a[0]] }); save(); renderLists($('#searchInput').value); renderHome(); showToast('Grupo creado'); }));
+$('#backBtn').addEventListener('click', closeChat);
+$('#openSidebar').addEventListener('click', () => document.body.classList.add('side-open'));
+$('#collapseSidebar').addEventListener('click', () => document.body.classList.remove('side-open'));
+$('#sidebarSearchBtn').addEventListener('click', () => { document.body.classList.remove('side-open'); $('#searchInput').focus(); });
+$('#scrim').addEventListener('click', () => document.body.classList.remove('side-open'));
+$('#closeDialog').addEventListener('click', closeDialog);
+$('#simpleDialog').addEventListener('click', (e) => { if (e.target.id === 'simpleDialog') closeDialog(); });
+
+const submitHero = () => { const v = $('#heroInput').value.trim(); if (!v) return; $('#heroInput').value = ''; autoGrow($('#heroInput')); const chat = { title: v.slice(0, 42) || 'Nuevo chat', desc: 'Conversación con Hermes Cloud', time: 'Ahora', agents: ['D'], status: 'Nuevo' }; chats.unshift(chat); selectedIndex = 0; save(); openChat(chat); sendText(v); };
+$('#heroSendBtn').addEventListener('click', submitHero);
+$('#sendBtn').addEventListener('click', () => { const v = $('#messageInput').value.trim(); if (!v) return; $('#messageInput').value = ''; autoGrow($('#messageInput')); sendText(v); });
+[$('#heroInput'), $('#messageInput')].forEach((t) => {
+  t.addEventListener('input', () => autoGrow(t));
+  t.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !isMobile()) { e.preventDefault(); (t.id === 'heroInput' ? submitHero : $('#sendBtn')).click(); }
+  });
 });
-document.querySelector('#loginForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const password = document.querySelector('#loginPassword').value;
-  loginStatus.textContent = 'Comprobando…';
+$('#heroMicBtn').addEventListener('click', (e) => toggleRecording(e.currentTarget));
+$('#micBtn').addEventListener('click', (e) => toggleRecording(e.currentTarget));
+$('#heroVoiceBtn').addEventListener('click', voiceInfo);
+$('#voiceBtn').addEventListener('click', voiceInfo);
+
+const placeMenus = (anchor, menu) => toggleMenu(menu, anchor);
+['#modelPill', '#modelPillChat'].forEach((s) => $(s).addEventListener('click', (e) => { e.stopPropagation(); placeMenus(e.currentTarget, '#modelMenu'); }));
+['#effortPill', '#effortPillChat'].forEach((s) => $(s).addEventListener('click', (e) => { e.stopPropagation(); placeMenus(e.currentTarget, '#effortMenu'); }));
+document.addEventListener('click', () => { $('#modelMenu').hidden = true; $('#effortMenu').hidden = true; });
+document.querySelectorAll('#modelMenu button').forEach((b) => b.addEventListener('click', () => { selectedModel = b.dataset.model; save(); syncPills(); renderHome(); showToast(`Modelo: ${selectedModel}`); }));
+document.querySelectorAll('#effortMenu button').forEach((b) => b.addEventListener('click', () => { selectedEffort = b.dataset.effort; save(); syncPills(); renderHome(); showToast(`Esfuerzo: ${selectedEffort}`); }));
+
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = $('#loginPassword').value;
+  $('#loginStatus').textContent = 'Comprobando…';
   try {
     const { status } = await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
-    if (status === 200) {
-      document.querySelector('#loginPassword').value = '';
-      loginStatus.textContent = '';
-      await refreshSession();
-      showToast('Sesión iniciada');
-    } else if (status === 503) loginStatus.textContent = 'Backend sin configurar en Vercel.';
-    else loginStatus.textContent = 'Contraseña incorrecta.';
-  } catch { loginStatus.textContent = 'Sin conexión con el backend.'; }
+    if (status === 200) { $('#loginPassword').value = ''; $('#loginStatus').textContent = ''; await refreshSession(); showToast('Sesión iniciada'); }
+    else if (status === 503) $('#loginStatus').textContent = 'Backend sin configurar en Vercel.';
+    else $('#loginStatus').textContent = 'Contraseña incorrecta.';
+  } catch { $('#loginStatus').textContent = 'Sin conexión con el backend.'; }
 });
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeDialog(); document.querySelector('#closeChat').click(); } if (event.key.toLowerCase() === 'n' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) document.querySelector('#newChatBtn').click(); });
-document.querySelector('#modelSelect').firstChild.textContent = `${selectedModel} `;
-render(); renderGroups(); selectChat(0);
-refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260904-8').catch(() => {}));
+$('#logoutBtn').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch {} showLogin('Sesión cerrada.'); setConn(false, 'Requiere login'); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeDialog(); if (activeChat) closeChat(); document.body.classList.remove('side-open'); }
+  if ((e.key.toLowerCase() === 'n' || e.key.toLowerCase() === 'k') && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) startNewChat();
+});
+
+syncPills(); renderLists(); renderHome(); showHome(); refreshSession();
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260904-9').catch(() => {}));

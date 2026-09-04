@@ -4,8 +4,8 @@
   "description": "Sala móvil para conversar con agentes de Limpatex",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#f7f5f1",
-  "theme_color": "#310984",
+  "background_color": "#16181d",
+  "theme_color": "#16181d",
   "lang": "es",
   "icons": []
 }
