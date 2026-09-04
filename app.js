@@ -89,7 +89,9 @@ function createChat(agentName) {
 }
 
 document.querySelector('#searchInput').addEventListener('input', (event) => { const query = event.target.value.toLowerCase(); render(chats.filter((chat) => `${chat.title} ${chat.desc}`.toLowerCase().includes(query))); });
-document.querySelector('#newChatBtn').addEventListener('click', () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar?', agents, createChat));
+const startNewChat = () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar?', agents, createChat);
+document.querySelector('#newChatBtn').addEventListener('click', startNewChat);
+document.querySelector('#mobileNewChatBtn').addEventListener('click', startNewChat);
 document.querySelector('#newGroupBtn').addEventListener('click', () => openDialog('NUEVO GRUPO', 'Elige los agentes del grupo', agents, (agent) => { groups.unshift({ name: `Grupo con ${agent.split(' · ')[0]}`, desc: '1 agente · nuevo', agents: [agent[0]] }); save(); renderGroups(); showToast('Grupo creado y guardado en este dispositivo'); }));
 document.querySelector('#groupsNav').addEventListener('click', () => { document.querySelector('.group-heading').scrollIntoView({ behavior: 'smooth' }); showToast('Mostrando grupos de agentes'); });
 document.querySelector('#viewAll').addEventListener('click', () => showToast(`Tienes ${chats.length} conversaciones guardadas`));
