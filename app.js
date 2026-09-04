@@ -25,8 +25,11 @@ const dialog = document.querySelector('#simpleDialog');
 
 function syncKeyboardViewport() {
   if (!window.visualViewport) return;
-  const keyboardOffset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+  const viewport = window.visualViewport;
+  const keyboardOffset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
   document.documentElement.style.setProperty('--keyboard-offset', `${keyboardOffset}px`);
+  document.documentElement.style.setProperty('--app-height', `${viewport.height}px`);
+  document.documentElement.style.setProperty('--viewport-top', `${viewport.offsetTop}px`);
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', syncKeyboardViewport);

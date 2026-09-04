@@ -45,3 +45,8 @@
   .chat-window .composer{position:fixed;left:0;right:0;bottom:var(--keyboard-offset,0px);z-index:20;flex:none;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:var(--card)}
   .chat-window .composer input{min-width:0;font-size:16px}
 }
+@media (max-width:760px){
+  .chat-overlay{top:var(--viewport-top,0px);bottom:auto;height:var(--app-height,100dvh);min-height:0}
+  .chat-window{height:var(--app-height,100dvh);min-height:0}
+  .chat-window .composer{position:absolute;bottom:0;left:0;right:0}
+}
