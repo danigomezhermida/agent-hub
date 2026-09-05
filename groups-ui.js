@@ -46,13 +46,14 @@
   }
 
   function validRun(value, expectedRunId, expectedGroupId) {
-    if (!value || value.id !== expectedRunId || value.groupId !== expectedGroupId || !RUN_STATES.has(value.state) || !Array.isArray(value.steps)) {
+    if (!value || !ID.test(value.id || '') || value.id !== expectedRunId || value.groupId !== expectedGroupId || !RUN_STATES.has(value.state) || !Array.isArray(value.steps)) {
       throw new Error('Hermes devolvió un estado de ejecución no válido.');
     }
     return {
       id: value.id,
       groupId: value.groupId,
       state: value.state,
+      message: typeof value.message === 'string' ? value.message : '',
       steps: value.steps.filter(function (step) {
         return step && typeof step.profile === 'string' && typeof step.stage === 'string' && typeof step.status === 'string';
       }).map(function (step) { return { profile: step.profile, stage: step.stage, status: step.status }; }),
@@ -76,6 +77,11 @@
     this.onOpen = options.onOpen || function () {};
     this.onCount = options.onCount || function () {};
     this.isVoiceBusy = options.isVoiceBusy || function () { return false; };
+    this._now = options.now || Date.now;
+    this._setTimer = options.setTimer || this.window.setTimeout.bind(this.window);
+    this._clearTimer = options.clearTimer || this.window.clearTimeout.bind(this.window);
+    this.observationIntervalMs = Math.max(1, Number(options.observationIntervalMs) || 3000);
+    this.observationMaxMs = Math.min(600000, Math.max(1, Number(options.observationMaxMs) || 600000));
     this.groups = [];
     this.revision = null;
     this.catalog = null;
@@ -84,6 +90,12 @@
     this.loaded = false;
     this.operationBusy = false;
     this.generation = 0;
+    this.leaseSequence = 0;
+    this.leaseOwner = null;
+    this.observationSequence = 0;
+    this.observation = null;
+    this.histories = {};
+    this.selectedHistoryId = null;
     this.runs = this._readRuns();
     this._bind();
     this.revoke();
@@ -99,7 +111,8 @@
         var record = value[groupId], runId = record && (record.runId || record.id);
         if (!ID.test(groupId) || !ID.test(runId || '')) return;
         var notSubmitted = record.notSubmitted === true && record.state === 'failed';
-        safe[groupId] = { runId: runId, id: runId, groupId: groupId, state: notSubmitted ? 'failed' : 'uncertain', notSubmitted: notSubmitted, message: typeof record.message === 'string' ? record.message : '', steps: [], text: '', error: '' };
+        var cachedTerminal = TERMINAL_STATES.has(record.state) && !notSubmitted;
+        safe[groupId] = { runId: runId, id: runId, groupId: groupId, state: notSubmitted ? 'failed' : 'uncertain', notSubmitted: notSubmitted, cachedTerminal: cachedTerminal, message: typeof record.message === 'string' ? record.message : '', steps: [], text: '', error: '' };
       });
       return safe;
     } catch (_) { return {}; }
@@ -129,20 +142,107 @@
   GroupUI.prototype._withGesture = function (operation) {
     if (this.operationBusy) return Promise.reject(new Error('Espera a que termine la operación anterior.'));
     this._assertOwner();
+    if (this.observation?.polling) return Promise.reject(new Error('Espera a que termine la consulta de estado.'));
+    this._stopObservation(false);
     var opened;
     try { opened = this.transport.openVoice(); }
-    catch (error) { return Promise.reject(error); }
+    catch (error) {
+      if (!this.observation) this._closeLease(this.leaseOwner);
+      return Promise.reject(error);
+    }
     this._setBusy(true);
-    var self = this, generation = this.generation;
+    var self = this, generation = this.generation, leaseId = ++this.leaseSequence;
+    this.leaseOwner = leaseId;
+    if (this.observation) this.observation.leaseId = leaseId;
     var fence = function () { self._assertFence(generation); };
     return Promise.resolve(opened).then(function () {
       fence();
-      return operation(fence);
+      return operation(fence, leaseId);
     }).finally(function () {
       if (self.generation !== generation) return;
       self._setBusy(false);
-      if (!self.isVoiceBusy()) self.transport.closeVoice?.();
+      if (!self.observation || self.observation.leaseId !== leaseId) self._closeLease(leaseId);
     });
+  };
+  GroupUI.prototype._closeLease = function (leaseId) {
+    if (leaseId == null || this.leaseOwner !== leaseId) return;
+    this.leaseOwner = null;
+    if (!this.isVoiceBusy()) this.transport.closeVoice?.();
+  };
+  GroupUI.prototype.pauseObservation = function () { this._stopObservation(true); };
+  GroupUI.prototype._stopObservation = function (closeLease) {
+    var observation = this.observation;
+    if (!observation) return;
+    this.observation = null;
+    if (observation.timer != null) this._clearTimer(observation.timer);
+    if (observation.deadlineTimer != null) this._clearTimer(observation.deadlineTimer);
+    if (closeLease !== false) this._closeLease(observation.leaseId);
+    this._renderControls();
+  };
+  GroupUI.prototype._observationInvalid = function (observation) {
+    return this.observation !== observation || this.generation !== observation.generation ||
+      this.activeId !== observation.groupId || this.transport.ownerScope?.() !== 'personal' ||
+      this.document.visibilityState === 'hidden' || this.isVoiceBusy() || this._now() >= observation.deadline;
+  };
+  GroupUI.prototype._scheduleObservation = function (observation) {
+    var self = this;
+    if (this.observation !== observation) return;
+    if (this._observationInvalid(observation)) {
+      this._stopObservation(!this.isVoiceBusy());
+      return;
+    }
+    var delay = Math.min(this.observationIntervalMs, observation.deadline - this._now());
+    observation.timer = this._setTimer(function () { self._pollObservation(observation); }, delay);
+  };
+  GroupUI.prototype._beginObservation = function (run, leaseId) {
+    if (!run || TERMINAL_STATES.has(run.state) || this.activeId !== run.groupId) return false;
+    this._stopObservation(false);
+    var observation = {
+      id: ++this.observationSequence,
+      runId: run.id,
+      groupId: run.groupId,
+      generation: this.generation,
+      leaseId: leaseId,
+      deadline: this._now() + this.observationMaxMs,
+      timer: null,
+      deadlineTimer: null
+    };
+    this.leaseOwner = leaseId;
+    this.observation = observation;
+    var self = this;
+    observation.deadlineTimer = this._setTimer(function () {
+      if (self.observation === observation) self._stopObservation(!self.isVoiceBusy());
+    }, this.observationMaxMs);
+    this._scheduleObservation(observation);
+    this._renderControls();
+    return true;
+  };
+  GroupUI.prototype._pollObservation = async function (observation) {
+    observation.timer = null;
+    if (this.observation !== observation) return;
+    if (this._observationInvalid(observation)) { this._stopObservation(!this.isVoiceBusy()); return; }
+    if (this.operationBusy) { this._scheduleObservation(observation); return; }
+    observation.polling = true; this._renderControls();
+    try {
+      // Deliberately READ-ONLY: timers reuse the authorized lease and never open
+      // a popup or replay startGroupRun.
+      var reply = await this.transport.storage('getGroupRun', { runId: observation.runId });
+      if (this.observation !== observation) return;
+      if (this._observationInvalid(observation)) { this._stopObservation(!this.isVoiceBusy()); return; }
+      var run = validRun(reply, observation.runId, observation.groupId);
+      var current = this.runs[observation.groupId];
+      if (!current || (current.runId || current.id) !== observation.runId) { this._stopObservation(true); return; }
+      this._persistRun(Object.assign({ runId: run.id, message: current.message || '' }, run));
+      if (TERMINAL_STATES.has(run.state)) this._stopObservation(true);
+      else this._scheduleObservation(observation);
+    } catch (error) {
+      if (this.observation === observation) {
+        this._stopObservation(true);
+        this._report(error);
+      }
+    } finally {
+      observation.polling = false; this._renderControls();
+    }
   };
   GroupUI.prototype._report = function (error, target) {
     var message = error && error.code === 'conflict'
@@ -169,6 +269,13 @@
     });
     this._el('#startGroupBtn')?.addEventListener('click', function () { self.startFromGesture().catch(function () {}); });
     this._el('#refreshGroupRunBtn')?.addEventListener('click', function () { self.refreshRunFromGesture().catch(function () {}); });
+    this.document.addEventListener('visibilitychange', function () {
+      if (self.document.visibilityState === 'hidden') self._stopObservation(!self.isVoiceBusy());
+    });
+    this.window.addEventListener('pagehide', function () { self._stopObservation(!self.isVoiceBusy()); });
+    this.window.addEventListener('hashchange', function () {
+      if (self.observation && self.window.location.hash !== '#group=' + self.observation.groupId) self._stopObservation(!self.isVoiceBusy());
+    });
   };
 
   GroupUI.prototype.loadWithinLease = async function () {
@@ -249,6 +356,8 @@
     if (!this.loaded || this.transport.ownerScope?.() !== 'personal') return false;
     var group = this.groups.find(function (candidate) { return candidate.id === groupId; });
     if (!group) return false;
+    if (this.activeId && this.activeId !== groupId) this._stopObservation(!this.isVoiceBusy());
+    if (this.activeId !== groupId) this.selectedHistoryId = null;
     this.activeId = groupId;
     this._el('#groupTitle').textContent = group.name;
     this._el('#groupObjective').textContent = group.objective;
@@ -266,16 +375,20 @@
     this._el('#viewGroup').hidden = false;
     this.onOpen(group);
     this.renderList();
+    this._renderHistory(this.histories[groupId] || []);
     this._renderRun(this.runs[groupId] || null);
     this._renderControls();
     return true;
   };
   GroupUI.prototype.hideDetail = function () {
+    this._stopObservation(!this.isVoiceBusy());
     var view = this._el('#viewGroup'); if (view) view.hidden = true;
     this.activeId = null;
     this.renderList();
   };
   GroupUI.prototype.revoke = function () {
+    this._stopObservation(!this.isVoiceBusy());
+    this._closeLease(this.leaseOwner);
     this.generation += 1;
     this.operationBusy = false;
     this.runs = this._readRuns();
@@ -285,6 +398,10 @@
     this.loaded = false;
     this.activeId = null;
     this.editingId = null;
+    this.histories = {};
+    this.selectedHistoryId = null;
+    this._el('#groupRunHistory')?.remove();
+    this._el('#groupObservationStatus')?.remove();
     this._el('#groupList')?.replaceChildren();
     if (this._el('#viewGroup')) this._el('#viewGroup').hidden = true;
     if (this._el('#groupDialog')) this._el('#groupDialog').hidden = true;
@@ -379,27 +496,82 @@
     var issue = group ? this._groupIssue(group) : 'Sin grupo activo.';
     var pending = group ? this.runs[group.id] : null;
     var blocksStart = pending && !TERMINAL_STATES.has(pending.state);
-    if (this._el('#newGroupBtn')) this._el('#newGroupBtn').disabled = !owner || this.operationBusy;
-    if (this._el('#reloadGroupsBtn')) this._el('#reloadGroupsBtn').disabled = !owner || this.operationBusy;
-    if (this._el('#editGroupBtn')) this._el('#editGroupBtn').disabled = !group || this.operationBusy;
-    if (this._el('#saveGroupBtn')) this._el('#saveGroupBtn').disabled = this.operationBusy;
-    if (this._el('#startGroupBtn')) this._el('#startGroupBtn').disabled = !group || Boolean(issue) || Boolean(blocksStart) || this.operationBusy;
+    var polling = Boolean(this.observation?.polling), self = this;
+    if (group) {
+      var note = this._el('#groupObservationStatus');
+      if (!note) { note = this.document.createElement('p'); note.id = 'groupObservationStatus'; note.setAttribute('role','status'); this._el('#groupRunStatus')?.after(note); }
+      var wording = this.observation ? 'Seguimiento automático activo (máximo 10 minutos). No se reenvía la consulta.' : blocksStart ? 'Seguimiento pausado. Pulsa Consultar estado para continuar; no se reenvía la consulta.' : '';
+      if (note.textContent !== wording) note.textContent = wording;
+      var currentButton = this._el('#groupRunCurrent');
+      if (!currentButton) {
+        currentButton = this.document.createElement('button'); currentButton.id = 'groupRunCurrent'; currentButton.type = 'button'; currentButton.className = 'secondary-btn'; currentButton.textContent = 'Ver consulta actual'; note.after(currentButton);
+        currentButton.onclick = function () { self.selectedHistoryId = null; self._renderRun(self.runs[self.activeId]); self._renderHistory(self.histories[self.activeId] || []); };
+      }
+      currentButton.hidden = !this.selectedHistoryId;
+    }
+    // A foreground gesture cannot overlap an exact-state GET on the shared bridge.
+    this.document.querySelectorAll('#newGroupBtn,#reloadGroupsBtn,#editGroupBtn,#saveGroupBtn,#startGroupBtn,#refreshGroupRunBtn').forEach(function(button) { button.dataset.polling = String(polling); });
+    if (this._el('#newGroupBtn')) this._el('#newGroupBtn').disabled = !owner || (this.operationBusy || polling);
+    if (this._el('#reloadGroupsBtn')) this._el('#reloadGroupsBtn').disabled = !owner || (this.operationBusy || polling);
+    if (this._el('#editGroupBtn')) this._el('#editGroupBtn').disabled = !group || (this.operationBusy || polling);
+    if (this._el('#saveGroupBtn')) this._el('#saveGroupBtn').disabled = (this.operationBusy || polling);
+    if (this._el('#startGroupBtn')) this._el('#startGroupBtn').disabled = !group || Boolean(issue) || Boolean(blocksStart) || (this.operationBusy || polling);
     if (this._el('#refreshGroupRunBtn')) {
       this._el('#refreshGroupRunBtn').hidden = !group;
-      this._el('#refreshGroupRunBtn').disabled = !group || this.operationBusy;
+      this._el('#refreshGroupRunBtn').disabled = !group || (this.operationBusy || polling);
     }
   };
   GroupUI.prototype._persistRun = function (record) {
     this.runs[record.groupId] = copy(record);
     this._writeRuns();
-    this._renderRun(record);
+    if (!this.selectedHistoryId || this.selectedHistoryId === record.id) this._renderRun(record);
+    this._renderControls();
+  };
+  GroupUI.prototype._historyRoot = function () {
+    var view = this._el('#viewGroup');
+    if (!view) return null;
+    var section = this._el('#groupRunHistory');
+    if (section) return section;
+    section = this.document.createElement('section');
+    section.id = 'groupRunHistory';
+    var title = this.document.createElement('h3'); title.textContent = 'Historial verificado';
+    var list = this.document.createElement('ol');
+    section.append(title, list); view.appendChild(section);
+    return section;
+  };
+  GroupUI.prototype._renderHistory = function (runs) {
+    var self = this, section = this._historyRoot();
+    if (!section) return;
+    var list = section.querySelector('ol'); list.textContent = '';
+    runs.slice(0, 20).forEach(function (run) {
+      var item = self.document.createElement('li'), button = self.document.createElement('button');
+      button.type = 'button';
+      var labels = { completed: 'Completada', failed: 'Error', running: 'En curso', uncertain: 'Por confirmar' };
+      button.textContent = (run.message || run.id).slice(0,120) + ' · ' + labels[run.state];
+      button.title = run.id;
+      button.setAttribute('aria-pressed', String(self.selectedHistoryId === run.id));
+      button.addEventListener('click', function () { self.selectedHistoryId = run.id; self._renderHistory(runs); self._renderRun(run); });
+      item.appendChild(button); list.appendChild(item);
+    });
+    section.hidden = runs.length === 0;
+  };
+  GroupUI.prototype._renderVerifiedText = function (container, text) {
+    var renderer = this.window.AgentHubContent && this.window.AgentHubContent.render;
+    if (typeof renderer === 'function') {
+      try { renderer(container, text, { notify: this.notify }); return; }
+      catch (_) {}
+    }
+    container.textContent = text;
   };
   GroupUI.prototype._renderRun = function (run) {
     var status = this._el('#groupRunStatus'), steps = this._el('#groupRunSteps'), result = this._el('#groupRunResult');
     if (!status || !steps || !result) return;
-    steps.textContent = ''; result.hidden = true; result.querySelector('p').textContent = '';
+    steps.textContent = ''; result.hidden = true;
+    var output = result.querySelector('[data-output]') || result.querySelector('p');
+    if (!output) return;
+    output.replaceChildren();
     if (!run) { status.textContent = 'Sin ejecuciones para este grupo.'; this._renderControls(); return; }
-    var labels = { starting: 'Ejecución preparada. Si recargaste, pulsa Consultar estado; no se reenviará.', running: 'Ejecución en curso. Pulsa Consultar estado para actualizar.', completed: 'Ejecución completada.', failed: run.notSubmitted ? 'La petición no fue aceptada por Hermes. Recarga la configuración antes de iniciar una petición nueva.' : 'Ejecución fallida.', uncertain: 'Resultado sin confirmar. Pulsa Consultar estado; no se reenviará.' };
+    var labels = { starting: 'Ejecución preparada. Si recargaste, pulsa Consultar estado; no se reenviará.', running: 'Ejecución en curso.', completed: 'Ejecución completada.', failed: run.notSubmitted ? 'La petición no fue aceptada por Hermes. Recarga la configuración antes de iniciar una petición nueva.' : 'Ejecución fallida.', uncertain: 'Resultado sin confirmar. Pulsa Consultar estado; no se reenviará.' };
     status.textContent = labels[run.state] || 'Estado pendiente. Pulsa Consultar estado.';
     (run.steps || []).forEach(function (step) {
       var item = this.document.createElement('li');
@@ -410,11 +582,11 @@
     if (run.state === 'completed') {
       result.hidden = false;
       result.querySelector('h3').textContent = 'Resultado final del director';
-      result.querySelector('p').textContent = run.text || 'El director terminó sin texto.';
+      this._renderVerifiedText(result.querySelector('[data-output]') || result.querySelector('p'), run.text || 'El director terminó sin texto.');
     } else if (run.state === 'failed' && run.error) {
       result.hidden = false;
       result.querySelector('h3').textContent = 'Error seguro de ejecución';
-      result.querySelector('p').textContent = run.error;
+      this._renderVerifiedText(result.querySelector('[data-output]') || result.querySelector('p'), run.error);
     }
     this._renderControls();
   };
@@ -432,7 +604,7 @@
       var duplicate = new Error('Ya hay una ejecución pendiente. Consulta su estado; no se enviará otra.'); this._report(duplicate); return Promise.reject(duplicate);
     }
     var self = this;
-    return this._withGesture(async function (fence) {
+    return this._withGesture(async function (fence, leaseId) {
       var runId = 'run_' + self.window.crypto.randomUUID();
       var pending = { runId: runId, id: runId, groupId: group.id, state: 'starting', message: message, steps: [], text: '', error: '' };
       try { self._persistRun(pending); }
@@ -443,6 +615,7 @@
         fence();
         self._persistRun(Object.assign({ runId: run.id, message: message }, run));
         if (input) input.value = '';
+        self._beginObservation(run, leaseId);
         return copy(run);
       } catch (error) {
         var definite = [400, 401, 403, 404, 409, 422].includes(error.httpStatus);
@@ -457,19 +630,30 @@
     var group = this._activeGroup(), pending = group && this.runs[group.id];
     if (!group) return Promise.reject(new Error('Selecciona un grupo.'));
     var runId = pending && (pending.runId || pending.id), self = this;
-    return this._withGesture(async function (fence) {
+    // An explicit refresh supersedes the old observer but deliberately retains
+    // its already-open popup until the new gesture lease takes ownership.
+    if (this.observation?.polling) return Promise.reject(new Error('Espera a que termine la consulta de estado.'));
+    this.selectedHistoryId = null;
+    this._stopObservation(false);
+    return this._withGesture(async function (fence, leaseId) {
       try {
         var listReply = await self.transport.storage('getGroupRuns', { groupId: group.id }); fence();
         var runs = validRunList(listReply, group.id);
+        self.histories[group.id] = copy(runs);
+        self._renderHistory(runs);
         var run = runId && runs.find(function (candidate) { return candidate.id === runId; });
-        if (!run && runId && ID.test(runId)) { var exactReply = await self.transport.storage('getGroupRun', { runId: runId }); fence(); run = validRun(exactReply, runId, group.id); }
-        // Once the exact local request is server-confirmed terminal, show the
-        // latest consultation too; another device may have submitted since then.
-        if (run && TERMINAL_STATES.has(run.state) && runs[0]) run = runs[0];
-        if (!run) run = runs[0]; // Server contract: newest first.
+        if (!run && runId && ID.test(runId)) {
+          var exactReply = await self.transport.storage('getGroupRun', { runId: runId }); fence();
+          run = validRun(exactReply, runId, group.id);
+        }
+        // A pending local request remains authoritative for duplicate-submit
+        // gating. An older terminal history item may be viewed, never promoted
+        // over that pending run.
+        if ((!run || TERMINAL_STATES.has(run.state)) && runs[0]) run = runs[0];
         if (!run) throw new Error('Este grupo todavía no tiene ejecuciones.');
         fence();
         self._persistRun(Object.assign({ runId: run.id, message: pending?.message || '' }, run));
+        self._beginObservation(run, leaseId);
         return copy(run);
       } catch (error) { self._report(error); throw error; }
     });

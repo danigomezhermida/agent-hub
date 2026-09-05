@@ -17,14 +17,14 @@ function markup() {
     <ul id="groupList"></ul><button id="newGroupBtn"></button><button id="reloadGroupsBtn"></button><span id="groupsStatus"></span>
     <section id="viewGroup" hidden><h2 id="groupTitle"></h2><p id="groupObjective"></p><div id="groupMembers"></div><div id="groupNotice"></div>
       <button id="editGroupBtn"></button><textarea id="groupMessage"></textarea><button id="startGroupBtn"></button><button id="refreshGroupRunBtn"></button>
-      <div id="groupRunStatus"></div><ol id="groupRunSteps"></ol><section id="groupRunResult" hidden><h3></h3><p></p></section>
+      <div id="groupRunStatus"></div><ol id="groupRunSteps"></ol><section id="groupRunResult" hidden><h3></h3><div data-output></div></section>
     </section>
     <div id="groupDialog" hidden><form id="groupForm"><h2 id="groupFormTitle"></h2><input id="groupName"><textarea id="groupObjectiveInput"></textarea>
       <p id="groupDirector"></p><div id="groupMemberChoices"></div><div id="groupFormError"></div><button id="saveGroupBtn" type="submit"></button><button id="cancelGroupBtn" type="button"></button>
     </form></div>`;
 }
 
-function harness({ groups = [group], cat = catalog, stored = {}, owner = 'personal', handlers = {} } = {}) {
+function harness({ groups = [group], cat = catalog, stored = {}, owner = 'personal', handlers = {}, isVoiceBusy = () => false, clock = null, content = null } = {}) {
   const dom = new JSDOM(markup(), { url: 'https://hub.test/' });
   const w = dom.window;
   for (const [key, value] of Object.entries(stored)) w.localStorage.setItem(key, value);
@@ -46,8 +46,35 @@ function harness({ groups = [group], cat = catalog, stored = {}, owner = 'person
     }
   };
   const notices = [];
-  const ui = new GroupUI({ window: w, document: w.document, transport, notify: text => notices.push(text), onOpen: () => {}, onCount: () => {} });
+  if (content) w.AgentHubContent = content;
+  const ui = new GroupUI({
+    window: w, document: w.document, transport, notify: text => notices.push(text), onOpen: () => {}, onCount: () => {}, isVoiceBusy,
+    observationIntervalMs: 10, observationMaxMs: 50,
+    now: clock && (() => clock.now),
+    setTimer: clock && ((fn, delay) => clock.set(fn, delay)),
+    clearTimer: clock && (id => clock.clear(id))
+  });
   return { dom, w, ui, calls, notices, closes: () => closes, $: selector => w.document.querySelector(selector), flush: () => new Promise(resolve => setImmediate(resolve)) };
+}
+
+function manualClock() {
+  let nextId = 1;
+  const jobs = new Map();
+  return {
+    now: 0,
+    set(fn, delay) { const id = nextId++; jobs.set(id, { at: this.now + delay, fn }); return id; },
+    clear(id) { jobs.delete(id); },
+    async advance(ms) {
+      const end = this.now + ms;
+      while (true) {
+        const due = [...jobs.entries()].filter(([, job]) => job.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        jobs.delete(due[0]); this.now = due[1].at; due[1].fn(); await new Promise(resolve => setImmediate(resolve));
+      }
+      this.now = end; await new Promise(resolve => setImmediate(resolve));
+    },
+    pending: () => jobs.size
+  };
 }
 
 async function loaded(h) { await h.ui.loadFromGesture(); }
@@ -217,4 +244,133 @@ test('definite rejected start stays not-sent and permits a new explicit submissi
   await reloaded.flush(); await reloaded.flush();
   assert.equal(reloaded.calls.filter(call => call.op === 'startGroupRun').length, 1);
   h.dom.window.close(); reloaded.dom.window.close();
+});
+
+test('a started run is observed by bounded exact GETs on its existing popup lease', async () => {
+  const clock = manualClock(); let polls = 0;
+  const h = harness({ clock, handlers: {
+    startGroupRun: args => ({ id: args.runId, groupId: args.groupId, state: 'running', steps: [], text: '', error: '' }),
+    getGroupRun: args => ({ id: args.runId, groupId: group.id, state: ++polls === 2 ? 'completed' : 'running', steps: [], text: polls === 2 ? 'Resultado exacto' : '', error: '' })
+  } });
+  await loaded(h); const closesBefore = h.closes(); h.ui.open(group.id); h.$('#groupMessage').value = 'Observa';
+  await h.ui.startFromGesture();
+  assert.equal(h.closes(), closesBefore, 'the start lease stays open while observing');
+  await clock.advance(20);
+  assert.equal(h.calls.filter(call => call.op === 'getGroupRun').length, 2);
+  assert.equal(h.calls.filter(call => call.op === 'openVoice').length, 2, 'timers never open a popup');
+  assert.equal(h.calls.some(call => call.op === 'getGroupRuns'), false);
+  assert.match(h.$('#groupRunResult [data-output]').textContent, /Resultado exacto/);
+  assert.equal(h.closes(), closesBefore + 1);
+  assert.equal(clock.pending(), 0);
+  h.dom.window.close();
+});
+
+test('automatic observation is bounded and stops on hide, revoke, visibility, navigation, or voice start', async () => {
+  for (const stop of ['hide', 'revoke', 'hidden', 'navigation', 'voice']) {
+    const clock = manualClock(); let voiceBusy = false;
+    const h = harness({ clock, isVoiceBusy: () => voiceBusy, handlers: {
+      startGroupRun: args => ({ id: args.runId, groupId: args.groupId, state: 'running', steps: [], text: '', error: '' }),
+      getGroupRun: args => ({ id: args.runId, groupId: group.id, state: 'running', steps: [], text: '', error: '' })
+    } });
+    await loaded(h); h.ui.open(group.id); h.$('#groupMessage').value = stop; await h.ui.startFromGesture();
+    if (stop === 'hide') h.ui.hideDetail();
+    if (stop === 'revoke') h.ui.revoke();
+    if (stop === 'hidden') { Object.defineProperty(h.w.document, 'visibilityState', { configurable: true, value: 'hidden' }); h.w.document.dispatchEvent(new h.w.Event('visibilitychange')); }
+    if (stop === 'navigation') h.w.dispatchEvent(new h.w.Event('pagehide'));
+    if (stop === 'voice') voiceBusy = true;
+    await clock.advance(stop === 'voice' ? 10 : 60);
+    assert.equal(h.calls.filter(call => call.op === 'getGroupRun').length, 0, stop + ' must stop before another GET');
+    assert.equal(clock.pending(), 0, stop + ' must clear its timer');
+    h.dom.window.close();
+  }
+
+  const clock = manualClock();
+  const bounded = harness({ clock, handlers: {
+    startGroupRun: args => ({ id: args.runId, groupId: args.groupId, state: 'running', steps: [], text: '', error: '' }),
+    getGroupRun: args => ({ id: args.runId, groupId: group.id, state: 'running', steps: [], text: '', error: '' })
+  } });
+  await loaded(bounded); bounded.ui.open(group.id); bounded.$('#groupMessage').value = 'Límite'; await bounded.ui.startFromGesture();
+  await clock.advance(100);
+  assert.ok(bounded.calls.filter(call => call.op === 'getGroupRun').length <= 5);
+  assert.equal(clock.pending(), 0);
+  bounded.dom.window.close();
+});
+
+test('verified latest-20 history is selectable without replacing the current pending run', async () => {
+  const pending = { runId: 'run_pending', id: 'run_pending', groupId: group.id, state: 'running', message: 'Actual', steps: [], text: '', error: '' };
+  const runs = Array.from({ length: 20 }, (_, i) => ({ id: 'run_' + i, groupId: group.id, state: 'completed', steps: [], text: 'Salida exacta ' + i, error: '' }));
+  const h = harness({ stored: { 'agenthub.group-runs.v1': JSON.stringify({ [group.id]: pending }) }, handlers: {
+    getGroupRuns: () => ({ runs }),
+    getGroupRun: args => ({ id: args.runId, groupId: group.id, state: 'running', steps: [], text: '', error: '' })
+  } });
+  await loaded(h); h.ui.open(group.id); await h.ui.refreshRunFromGesture();
+  const buttons = [...h.w.document.querySelectorAll('#groupRunHistory button')];
+  assert.equal(buttons.length, 20);
+  buttons[7].click();
+  assert.match(h.$('#groupRunResult [data-output]').textContent, /Salida exacta 7/);
+  assert.equal(h.ui.runs[group.id].runId, 'run_pending');
+  assert.equal(h.$('#startGroupBtn').disabled, true, 'older terminal history cannot enable a duplicate submit');
+  assert.equal(h.calls.some(call => call.op === 'startGroupRun'), false);
+  h.dom.window.close();
+});
+
+test('verified output uses AgentHubContent when available and keeps the result paragraph boundary', async () => {
+  const rendered = [];
+  const h = harness({ content: { render: (container, text, options) => { rendered.push({ container, text, options }); container.textContent = 'content:' + text; } } });
+  await loaded(h); h.ui.open(group.id); await h.ui.refreshRunFromGesture();
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].container, h.$('#groupRunResult [data-output]'));
+  assert.equal(rendered[0].text, 'Síntesis final');
+  assert.equal(typeof rendered[0].options.notify, 'function');
+  assert.match(h.$('#groupRunResult [data-output]').textContent, /content:Síntesis final/);
+  h.dom.window.close();
+});
+
+test('foreground work pauses observation and its deadline cannot close an active write lease', async () => {
+ const clock=manualClock();let resolveWork;
+ const h=harness({clock});await loaded(h);h.ui.open(group.id);h.$('#groupMessage').value='Test';await h.ui.startFromGesture();
+ const work=h.ui._withGesture(()=>new Promise(resolve=>{resolveWork=resolve;}));await h.flush();
+ const closes=h.closes();await clock.advance(100);
+ assert.equal(h.calls.filter(c=>c.op==='getGroupRun').length,0);
+ assert.equal(h.closes(),closes);resolveWork();await work;
+ assert.equal(h.ui.observation,null);h.dom.window.close();
+});
+
+test('viewing an old verified result remains stable while the current run is observed',async()=>{
+ const clock=manualClock();
+ const pending={id:'pending',runId:'pending',groupId:group.id,state:'running'};
+ const h=harness({clock,stored:{'agenthub.group-runs.v1':JSON.stringify({[group.id]:pending})},handlers:{
+  getGroupRuns:()=>({runs:[{...pending,steps:[],text:''},{id:'older',groupId:group.id,state:'completed',steps:[],text:'Keep old selected'}]}),
+  getGroupRun:args=>({id:args.runId,groupId:group.id,state:'running',steps:[],text:''})
+ }});
+ await loaded(h);h.ui.open(group.id);await h.ui.refreshRunFromGesture();
+ [...h.w.document.querySelectorAll('#groupRunHistory button')][1].click();await clock.advance(10);
+ assert.equal(h.$('#groupRunResult').hidden,false);
+ assert.match(h.$('#groupRunResult').textContent,/Keep old selected/);
+ assert.equal(h.ui.runs[group.id].runId,'pending');assert.equal(h.$('#startGroupBtn').disabled,true);
+ h.dom.window.close();
+});
+
+test('a stale poll reply cannot stop or close a newer observation lease', async () => {
+  const clock = manualClock(); let oldRunId, resolveOld;
+  const h = harness({ clock, handlers: {
+    startGroupRun: args => { oldRunId = args.runId; return { id: args.runId, groupId: group.id, state: 'running', steps: [], text: '', error: '' }; },
+    getGroupRuns: () => ({ runs: [{ id: 'run_new', groupId: group.id, state: 'running', steps: [], text: '', error: '' }] }),
+    getGroupRun: args => args.runId === oldRunId
+      ? new Promise(resolve => { resolveOld = resolve; })
+      : ({ id: args.runId, groupId: group.id, state: 'running', steps: [], text: '', error: '' })
+  } });
+  await loaded(h); h.ui.open(group.id); h.$('#groupMessage').value = 'Vieja'; await h.ui.startFromGesture();
+  await clock.advance(10);
+  assert.equal(typeof resolveOld, 'function');
+  h.ui.hideDetail(); h.ui.open(group.id);
+  h.ui.runs[group.id] = { runId: 'run_new', id: 'run_new', groupId: group.id, state: 'running', steps: [], text: '', error: '' };
+  await h.ui.refreshRunFromGesture();
+  const closes = h.closes();
+  resolveOld({ id: oldRunId, groupId: group.id, state: 'completed', steps: [], text: 'Salida obsoleta', error: '' });
+  await h.flush();
+  assert.equal(h.ui.observation.runId, 'run_new');
+  assert.equal(h.closes(), closes);
+  assert.doesNotMatch(h.$('#groupRunResult').textContent, /Salida obsoleta/);
+  h.ui.hideDetail(); h.dom.window.close();
 });

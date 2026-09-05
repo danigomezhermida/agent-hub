@@ -106,6 +106,15 @@ function connectorHarness(search = '?mode=turn', seededGrant = true) {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
+test('closing authorization reports cancellation and resets on explicit retry',()=>{
+ const h=clientHarness();h.api.open();h.popups[0].closed=true;h.tick();
+ assert.equal(h.api.isConnected(),false);
+ assert.match(h.api.connectionMessage?.() || '',/cerró.*Conectar/i);
+ h.api.open();assert.equal(h.api.connectionMessage(),'');
+ h.tick();receive(h,h.popups[1],{type:'ready',connected:true,ownerScope:'personal'});
+ assert.equal(h.api.connectionMessage(),'');assert.equal(h.api.isConnected(),true);
+});
+
 // Client security and lifecycle
 test('rejects forged origin, source and channel id', () => {
   const h = clientHarness(); h.api.open(); h.tick(); const popup = h.popups[0]; const hello = helloFor(h, popup);

@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260905-8" />
+  <link rel="stylesheet" href="styles.css?v=20260905-9" />
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebApplication","name":"Agent Hub Limpatex","applicationCategory":"BusinessApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0"}}
   </script>
@@ -43,6 +43,7 @@
       <div class="side-bottom">
         <div class="sync-panel" aria-labelledby="syncTitle">
           <strong id="syncTitle">Cuenta personal</strong>
+          <button class="sync-btn" id="connectBtn" type="button">Conectar Hermes</button>
           <button class="sync-btn" id="syncBtn" type="button">Sincronizar</button>
           <span id="syncStatus" role="status" aria-live="polite">Sincroniza para mostrar tu historial.</span>
           <button class="sync-reload" id="reloadRemoteBtn" type="button" hidden>Cargar versión remota</button>
@@ -81,6 +82,8 @@
             </div>
           </div>
         </div>
+        <p class="profile-hint" id="individualProfile">Hermes · Director responde en el chat individual. Para consultar especialistas, usa los grupos.</p>
+        <button class="secondary-btn" id="recoverDraftBtn" type="button" hidden>Recuperar borrador anterior sin conversación asignada</button>
         <div class="chips" id="chips"></div>
         <div class="fleet" id="fleet"></div>
       </section>
@@ -90,6 +93,7 @@
           <button class="side-icon only-mobile" id="backBtn" aria-label="Volver">‹</button>
           <div class="thread-title">
             <h2 id="chatWindowTitle">Conversación</h2>
+            <span class="profile-hint" id="chatProfile">Hermes · Director</span>
             <span class="backend-state" id="backendState">comprobando…</span>
           </div>
           <div class="thread-actions">
@@ -131,11 +135,11 @@
             <textarea id="groupMessage" rows="5" maxlength="12000" placeholder="Describe el análisis o propuesta que necesitas"></textarea>
             <div class="group-actions">
               <button class="primary-btn" id="startGroupBtn" type="button">Iniciar análisis</button>
-              <button class="secondary-btn" id="refreshGroupRunBtn" type="button">Consultar ejecuciones</button>
+              <button class="secondary-btn" id="refreshGroupRunBtn" type="button">Consultar estado e historial</button>
             </div>
             <p class="group-run-status" id="groupRunStatus" role="status" aria-live="polite">Sin ejecuciones para este grupo.</p>
             <ol class="group-run-steps" id="groupRunSteps"></ol>
-            <section class="group-result" id="groupRunResult" hidden><h3>Resultado final del director</h3><p></p></section>
+            <section class="group-result" id="groupRunResult" hidden><h3>Resultado final del director</h3><div data-output></div></section>
           </section>
         </div>
       </section>
@@ -154,16 +158,17 @@
     <button data-effort="high">high</button>
   </div>
 
-  <div class="login-overlay" id="loginOverlay" aria-hidden="true">
+  <div class="login-overlay" id="loginOverlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle" aria-describedby="loginStatus" aria-hidden="true">
     <div class="login-card">
       <div class="login-mark" aria-hidden="true">A</div>
-      <h2>Conectar con Hermes</h2>
+      <h2 id="loginTitle">Conectar con Hermes</h2>
       <p>Usa tu sesión de Hermes Cloud. Sin API key. Autoriza una vez. Después se abrirá solo durante cada mensaje y se cerrará al responder.</p>
       <form id="loginForm">
-        <p>Perfil conectado: limpatexdev-cloud.</p>
+        <p>Perfil de destino: limpatexdev-cloud. Aún debes autorizar el acceso.</p>
         <button>Conectar Hermes Cloud</button>
       </form>
       <p class="login-status" id="loginStatus" role="status"></p>
+      <button id="closeLoginBtn" type="button">Volver al inicio</button>
     </div>
   </div>
 
@@ -207,12 +212,13 @@
     <p class="voice-privacy">Audio guardado en este dispositivo y sincronizado con tu cuenta personal verificada. Transcripción y voz mediante Hermes. Durante la llamada mantén abierta su ventana. Usa auriculares para reducir el eco.</p>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script src="cloud-connection.js?v=20260905-8"></script>
-  <script src="recovery-ui.js?v=20260905-8"></script>
-  <script src="cloud-sync.js?v=20260905-8"></script>
-  <script src="voice-engine.js?v=20260905-8"></script>
-  <script src="voice-ui.js?v=20260905-8"></script>
-  <script src="groups-ui.js?v=20260905-8"></script>
-  <script src="app.js?v=20260905-8"></script>
+  <script src="cloud-connection.js?v=20260905-9"></script>
+  <script src="recovery-ui.js?v=20260905-9"></script>
+  <script src="cloud-sync.js?v=20260905-9"></script>
+  <script src="voice-engine.js?v=20260905-9"></script>
+  <script src="voice-ui.js?v=20260905-9"></script>
+  <script src="safe-content.js?v=20260905-9"></script>
+  <script src="groups-ui.js?v=20260905-9"></script>
+  <script src="app.js?v=20260905-9"></script>
 </body>
 </html>

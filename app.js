@@ -4,7 +4,7 @@ const seedChats = [
   { title: 'Operativa de septiembre', desc: 'Planificación y prioridades de hoy', time: 'Ayer', agents: ['O', 'D'], status: 'Listo' },
   { title: 'Ideas para SATUA', desc: 'Servicios y experiencia hospitality', time: '2 sep', agents: ['D'], status: 'Listo' }
 ];
-const agents = ['Dani · Director', 'Senior Dev', 'QA Limpatex', 'Operaciones'];
+const agents = ['Hermes · Director'];
 const MODELS = ['default', 'gpt-5.6-luna', 'claude-opus', 'gpt-4.1-mini'];
 const EFFORTS = ['low', 'medium', 'high'];
 const MODEL_LABEL = { 'default': 'Modelo de Hermes', 'gpt-5.6-luna': 'gpt-5.6-luna', 'claude-opus': 'claude-opus', 'gpt-4.1-mini': 'gpt-4.1-mini' };
@@ -24,8 +24,15 @@ let chats = snapshot?.chats || read(storage.chats, seedChats);
 let messages = snapshot?.messages || read(storage.messages, {});
 let sessions = snapshot?.sessions || read(storage.sessions, {});
 let sending = false;
-const draftKey = 'agenthub.drafts.v1';
-const drafts = read(draftKey, {});
+const draftKey = 'agenthub.drafts.v2';
+const storedDrafts = read(draftKey, null);
+const legacyDrafts = read('agenthub.drafts.v1', {});
+const drafts = {
+  home: typeof storedDrafts?.home === 'string' ? storedDrafts.home : (typeof legacyDrafts.heroInput === 'string' ? legacyDrafts.heroInput : ''),
+  byChat: Object.fromEntries(Object.entries(storedDrafts?.byChat || {}).filter(([, value]) => typeof value === 'string')),
+  legacyMessage: storedDrafts ? (storedDrafts.legacyMessage || '') : (legacyDrafts.messageInput || '')
+};
+let draftsVisible = false;
 let selectedModel = localStorage.getItem('agenthub.model.sso.v1') || 'default';
 let selectedEffort = localStorage.getItem(storage.effort) || 'medium';
 if (!MODELS.includes(selectedModel)) selectedModel = 'gpt-5.6-luna';
@@ -65,6 +72,7 @@ function showToast(msg) { const t = $('#toast'); t.textContent = msg; t.classLis
 function syncReady() { return Boolean(cloudSync?.isReady() && window.hermesCloud.ownerScope?.() === 'personal'); }
 function setSyncGate() {
   const ready = syncReady();
+  if (ready && !draftsVisible) { draftsVisible = true; restoreVisibleDrafts(); }
   document.body.classList.toggle('sync-locked', !ready);
   ['#newChatBtn','#mobileNewChatBtn','#chatNewBtn','#heroInput','#messageInput','#heroSendBtn','#sendBtn','#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { const el = $(id); if (el) el.disabled = !ready || sending || (voiceUI?.busy ?? false); });
   $('#recoverBtn').disabled = !ready || sending || Boolean(voiceUI?.busy);
@@ -76,6 +84,8 @@ function releaseMediaURLs() {
   mediaURLs.clear();
 }
 function clearSyncedView() {
+  stashVisibleDrafts(); draftsVisible = false;
+  $('#heroInput').value = ''; $('#messageInput').value = ''; $('#recoverDraftBtn').hidden = true;
   if (!preservedLocalSnapshot) preservedLocalSnapshot = cloneJSON(currentSnapshot());
   releaseMediaURLs(); document.querySelectorAll('dialog[data-turn-evidence]').forEach(dialog => dialog.remove()); activeChat = null; chats = []; messages = {}; sessions = {};
   groupUI?.revoke();
@@ -98,16 +108,16 @@ function syncStatus(status) {
 }
 async function refreshSession() {
   if (window.hermesCloud.isRevoking()) {
-    cloudSync?.revoke(); $('#loginOverlay').classList.remove('open'); setConn(false, 'Desconexión pendiente'); setSyncGate(); return false;
+    cloudSync?.revoke(); setLoginOpen(false); setConn(false, 'Desconexión pendiente'); setSyncGate(); return false;
   }
   if (window.hermesCloud.isConnected()) {
-    $('#loginOverlay').classList.remove('open');
+    setLoginOpen(false);
     if (syncReady()) setConn(true, 'Hermes sincronizado');
-    else setConn(false, 'Hermes autorizado · sincroniza');
+    else setConn(false, window.hermesCloud.ownerScope?.() === 'personal' ? 'Cuenta verificada · sincroniza' : 'Permiso guardado · verifica tu cuenta');
     if (cloudSync?.isReady() && !window.hermesCloud.ownerScope?.()) cloudSync.revoke();
     setSyncGate(); return syncReady();
   }
-  cloudSync?.revoke(); setConn(false, 'Conectar Hermes'); showLogin('Usa tu sesión de Hermes. No necesitas API key ni contraseña de Vercel.'); setSyncGate(); return false;
+  cloudSync?.revoke(); setConn(false, 'Conectar Hermes'); showLogin(window.hermesCloud.connectionMessage?.() || 'Usa tu sesión de Hermes. No necesitas API key ni contraseña de Vercel.'); setSyncGate(); return false;
 }
 window.addEventListener('hermes-connection', refreshSession);
 window.addEventListener('hermes-attention', () => showToast('Hermes necesita tu intervención en su dashboard.'));
@@ -116,10 +126,46 @@ function setConn(ok, text) {
   const el = $('#connText'); if (el) el.textContent = text;
   const bs = $('#backendState'); if (bs) bs.textContent = text.toLowerCase();
 }
-function showLogin(msg) {
-  $('#loginOverlay').classList.add('open');
-  if (msg) $('#loginStatus').textContent = msg;
+let loginReturnFocus = null;
+const loginBackground = new Map();
+function loginIsOpen() { return $('#loginOverlay').classList.contains('open'); }
+function setLoginOpen(open) {
+  const modal = $('#loginOverlay');
+  const wasOpen = loginIsOpen();
+  modal.classList.toggle('open', open);
+  modal.setAttribute('aria-hidden', String(!open));
+  if (open && !wasOpen) {
+    loginReturnFocus = document.activeElement;
+    for (const el of document.body.children) {
+      if (el === modal || el.tagName === 'SCRIPT' || el.id === 'toast') continue;
+      loginBackground.set(el, Boolean(el.inert)); el.inert = true;
+    }
+    $('#loginForm button').focus();
+  } else if (!open && wasOpen) {
+    for (const [el, inert] of loginBackground) el.inert = inert;
+    loginBackground.clear();
+    const target = loginReturnFocus?.isConnected && loginReturnFocus !== document.body && !loginReturnFocus.disabled ? loginReturnFocus : $(isMobile() ? '#openSidebar' : '#connectBtn');
+    target?.focus(); loginReturnFocus = null;
+  }
 }
+function showLogin(msg) {
+  if (msg) $('#loginStatus').textContent = msg;
+  setLoginOpen(true);
+}
+$('#closeLoginBtn').addEventListener('click', () => setLoginOpen(false));
+$('#connectBtn').addEventListener('click', () => showLogin('Conecta tu sesión de Hermes para trabajar.'));
+document.addEventListener('focusin', event => {
+  if (loginIsOpen() && !$('#loginOverlay').contains(event.target)) $('#loginForm button').focus();
+});
+document.addEventListener('keydown', event => {
+  if (!loginIsOpen()) return;
+  if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setLoginOpen(false); }
+  if (event.key === 'Tab') {
+    const buttons = [...$('#loginOverlay').querySelectorAll('button:not(:disabled)')];
+    const index = buttons.indexOf(document.activeElement);
+    event.preventDefault(); buttons[(index + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
+  }
+}, true);
 
 /* ---------- lists ---------- */
 function renderLists(filter = '') {
@@ -148,7 +194,7 @@ function renderHome() {
     b.addEventListener('click', () => { $('#heroInput').value = `Trabajemos en: ${s}`; $('#heroInput').focus(); });
     $('#chips').appendChild(b);
   });
-  $('#fleet').innerHTML = `<span><b>${agents.length}</b> agentes</span><span><b>${groupUI?.getGroupCount() || 0}</b> grupos reales</span><span><b>${escapeHtml(selectedModel)}</b> · ${escapeHtml(selectedEffort)}</span>`;
+  $('#fleet').innerHTML = `<span>Chat individual · <b>Director</b></span><span><b>${groupUI?.getGroupCount() || 0}</b> grupos reales</span><span><b>${escapeHtml(selectedModel)}</b> · ${escapeHtml(selectedEffort)}</span>`;
 }
 function syncPills() {
   ['#modelPill', '#modelPillChat'].forEach((s) => { const el = $(s); if (el) el.innerHTML = `${escapeHtml(selectedModel)} <span aria-hidden="true">⌄</span>`; });
@@ -158,17 +204,20 @@ function syncPills() {
 /* ---------- views ---------- */
 function showHome() {
   if (voiceUI?.busy) { showToast('Finaliza la voz antes de cambiar de conversación.'); return; }
-  activeChat = null;
+  stashVisibleDrafts();
+  activeChat = null; restoreVisibleDrafts();
   history.replaceState(null, '', location.pathname + location.search);
   $('#viewChat').hidden = true;
   groupUI?.hideDetail();
   const home = $('#viewHome'); home.hidden = false; home.style.display = '';
   document.body.classList.remove('chat-open');
+  autoGrow($('#heroInput'));
   renderLists($('#searchInput').value); renderHome();
 }
 function openChat(chat) {
   if (voiceUI && !voiceUI.canNavigate(chat)) { showToast('Finaliza la voz antes de cambiar de conversación.'); return; }
-  activeChat = chat;
+  stashVisibleDrafts();
+  activeChat = chat; restoreVisibleDrafts();
   history.replaceState(null, '', '#chat=' + chatKey(chat));
   selectedModel = chat.model || selectedModel;
   selectedEffort = chat.effort || selectedEffort;
@@ -178,6 +227,7 @@ function openChat(chat) {
   groupUI?.hideDetail();
   const thread = $('#viewChat'); thread.hidden = false;
   document.body.classList.add('chat-open');
+  autoGrow($('#messageInput'));
   $('#chatWindowTitle').textContent = chat.title;
   renderMessages(chat); renderLists($('#searchInput').value);
   document.body.classList.remove('side-open');
@@ -195,19 +245,50 @@ function renderMessages(chat) {
     return;
   }
   box.innerHTML = history.map((m) => {
-    if (m.role === 'assistant' || m.role === 'agent') return `<div class="msg-agent"><span class="who">HERMES</span>${escapeHtml(m.text || '')}</div>`;
+    if (m.role === 'assistant' || m.role === 'agent') return `<div class="msg-agent"><span class="who">HERMES · DIRECTOR</span><div class="safe-content" data-answer-id="${escapeHtml(m.id || '')}"></div></div>`;
     if (m.role === 'audio') return `<div class="msg-user msg-audio" data-message-id="${escapeHtml(m.id || '')}"><span class="audio-label">${escapeHtml(AUDIO_STATES[m.status] || 'Nota de voz')} · ${Math.round((m.duration || 0) / 1000)} s</span>${m.audioId ? `<audio controls preload="metadata" aria-label="Reproducir nota de voz" data-audio-id="${escapeHtml(m.audioId)}"></audio>` : '<span>Audio antiguo no recuperable</span>'}${m.text ? `<p class="transcript">${escapeHtml(m.text)}</p>` : ''}${m.status === 'transcription_error' ? `<button class="audio-retry" data-retry-audio="${escapeHtml(m.id)}">Reintentar transcripción</button>` : ''}</div>`;
     return `<div class="msg-user">${escapeHtml(m.text || '')}</div>`;
   }).join('');
+  const answers = history.filter(m => m.role === 'assistant' || m.role === 'agent');
+  box.querySelectorAll('.safe-content').forEach((container, index) => {
+    const text = answers[index].text || '';
+    if (window.AgentHubContent?.render) window.AgentHubContent.render(container, text, { notify: showToast });
+    else container.textContent = text; // A missing presentation asset must never hide the answer.
+  });
   if (chat.error) { const notice = document.createElement('div'); notice.setAttribute('role', 'alert'); notice.textContent = chat.error; box.appendChild(notice); }
   hydrateAudio(chat, box);
   box.querySelectorAll('[data-retry-audio]').forEach(button => { button.onclick = () => voiceUI?.retryNote(chat, history.find(m => m.id === button.dataset.retryAudio)); });
   box.scrollTop = box.scrollHeight;
 }
-function rememberDraft(input) {
-  drafts[input.id] = input.value;
-  try { localStorage.setItem(draftKey, JSON.stringify(drafts)); } catch { /* Keep visible draft. */ }
+function inputDraftId(input) { return input.id === 'heroInput' ? 'home' : activeChat?.id; }
+function persistDrafts() {
+  try { localStorage.setItem(draftKey, JSON.stringify(drafts)); }
+  catch { showToast('No se pudo guardar el borrador en este dispositivo. No recargues todavía.'); }
 }
+function rememberDraft(input, key = inputDraftId(input)) {
+  if (!key) return;
+  if (key === 'home') drafts.home = input.value;
+  else drafts.byChat[key] = input.value;
+  persistDrafts();
+}
+function stashVisibleDrafts() {
+  if (!draftsVisible) return;
+  rememberDraft($('#heroInput'));
+  if (activeChat) rememberDraft($('#messageInput'));
+}
+function restoreVisibleDrafts() {
+  if (!draftsVisible) return;
+  $('#heroInput').value = drafts.home;
+  $('#messageInput').value = activeChat ? (drafts.byChat[activeChat.id] || '') : '';
+  $('#recoverDraftBtn').hidden = !drafts.legacyMessage;
+  autoGrow($('#heroInput')); autoGrow($('#messageInput'));
+}
+$('#recoverDraftBtn').addEventListener('click', () => {
+  if (!syncReady() || !drafts.legacyMessage) return;
+  if ($('#heroInput').value.trim()) { showToast('Conserva o envía primero el borrador de inicio; no lo sobrescribiremos.'); return; }
+  drafts.home = String(drafts.legacyMessage); drafts.legacyMessage = '';
+  persistDrafts(); restoreVisibleDrafts();
+});
 function sendError(message, input) {
   let box = document.getElementById('sendError');
   if (!box) { box = document.createElement('div'); box.id = 'sendError'; box.setAttribute('role', 'alert'); }
@@ -266,6 +347,7 @@ async function respondToMessage(chat, entry, leaseReady = Promise.resolve()) {
 async function sendText(text, input = $('#messageInput')) {
   if (!text || sending || voiceUI?.busy) return;
   if (input.id !== 'heroInput' && activeChat?.archived) { showToast('Este hilo está archivado. Abre una conversación nueva; no reenvíes automáticamente el turno anterior.'); return; }
+  const sourceDraftId = inputDraftId(input);
   rememberDraft(input);
   if (input.id !== 'heroInput' && activeChat && (messages[activeChat.id] || []).some(m => ['uncertain','sending'].includes(m.delivery))) { showToast('Consulta el resultado pendiente antes de enviar otro mensaje a este hilo.'); return; }
   if (!window.hermesCloud.isConnected()) {
@@ -290,7 +372,7 @@ async function sendText(text, input = $('#messageInput')) {
     sendError('No se pudo guardar la conversación. El texto sigue aquí.', input);
     return;
   }
-  input.value = ''; rememberDraft(input); autoGrow(input);
+  input.value = ''; rememberDraft(input, sourceDraftId); autoGrow(input);
   openChat(chat);
   setConn(true, 'Pensando…');
   $('#messageList').insertAdjacentHTML('beforeend', '<div class="msg-agent" id="typingRow" role="status">Hermes está respondiendo…</div>');
@@ -329,6 +411,7 @@ function voiceTarget(fromHome) {
   return fromHome || !activeChat ? newConversation('Conversación de voz', agents[0]) : activeChat;
 }
 function authorizeVoice() {
+  groupUI?.pauseObservation();
   if (activeChat && (messages[activeChat.id] || []).some(m => ['uncertain','sending'].includes(m.delivery))) { showToast('Consulta el resultado pendiente antes de continuar con voz.'); return false; }
   if (activeChat?.archived) { showToast('Este hilo está archivado. Abre una conversación nueva.'); return false; }
   if (!window.hermesCloud.isConnected()) { showLogin('Conecta Hermes antes de usar el micrófono.'); return false; }
@@ -361,17 +444,20 @@ function toggleMenu(menu, anchor) {
   if (r.bottom > window.innerHeight - 220) m.style.top = `${Math.max(8, r.top - m.offsetHeight - 8)}px`;
   m.hidden = false;
 }
-function newConversation(title, agentName) {
+function newConversation(title, agentName = agents[0]) {
+  agentName = agents[0]; // The authenticated individual connector serves only this profile.
   return { id: crypto.randomUUID(), title, desc: 'Conversación con Hermes Cloud', time: 'Ahora', agent: agentName, agents: [agentName[0]], model: selectedModel, effort: selectedEffort, status: 'Nuevo' };
 }
-function createChat(agentName) {
-  openChat(newConversation(`Chat con ${agentName.split(' · ')[0]}`, agentName));
+function createChat() {
+  if (!syncReady()) { showToast('Conecta y sincroniza tu cuenta antes de abrir un chat.'); return; }
+  showHome();
+  if (!isMobile()) $('#heroInput').focus();
 }
-function autoGrow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 200)}px`; }
+function autoGrow(t) { t.style.height = 'auto'; t.style.height = `${Math.max(44, Math.min(t.scrollHeight, 200))}px`; }
 
 /* ---------- wiring ---------- */
 $('#searchInput').addEventListener('input', (e) => renderLists(e.target.value));
-const startNewChat = () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar?', agents, createChat);
+const startNewChat = () => createChat();
 $('#newChatBtn').addEventListener('click', startNewChat);
 $('#mobileNewChatBtn').addEventListener('click', startNewChat);
 $('#chatNewBtn').addEventListener('click', startNewChat);
@@ -388,7 +474,7 @@ const submitHero = () => sendText($('#heroInput').value.trim(), $('#heroInput'))
 $('#heroSendBtn').addEventListener('click', submitHero);
 $('#sendBtn').addEventListener('click', () => sendText($('#messageInput').value.trim(), $('#messageInput')));
 [$('#heroInput'), $('#messageInput')].forEach((t) => {
-  t.value = drafts[t.id] || '';
+  t.value = ''; // Restore stored drafts only after verifying the personal account.
   t.addEventListener('input', () => { autoGrow(t); rememberDraft(t); });
   t.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
@@ -410,6 +496,7 @@ document.querySelectorAll('#modelMenu button').forEach((b) => b.addEventListener
 document.querySelectorAll('#effortMenu button').forEach((b) => b.addEventListener('click', () => { selectedEffort = b.dataset.effort; save(); syncPills(); renderHome(); showToast(`Esfuerzo: ${selectedEffort}`); }));
 
 $('#syncBtn').addEventListener('click', () => {
+  groupUI?.pauseObservation();
   const operation = cloudSync.syncFromUserGesture();
   operation.then(async () => {
     setConn(true, 'Hermes sincronizado'); setSyncGate();
@@ -423,6 +510,7 @@ $('#syncBtn').addEventListener('click', () => {
   }).finally(() => { if (!voiceUI?.busy) window.hermesCloud.closeVoice?.(); });
 });
 $('#reloadRemoteBtn').addEventListener('click', () => {
+  groupUI?.pauseObservation();
   let ready;
   try { ready = window.hermesCloud.openVoice(); ready.catch(() => {}); }
   catch (error) { showToast(error.message); return; }
@@ -515,7 +603,8 @@ if (window.AgentGroups?.GroupUI) {
     isVoiceBusy: () => Boolean(voiceUI?.busy),
     onCount: () => renderHome(),
     onOpen: group => {
-      activeChat = null;
+      stashVisibleDrafts();
+      activeChat = null; restoreVisibleDrafts();
       $('#viewHome').hidden = true;
       $('#viewChat').hidden = true;
       history.replaceState(null, '', '#group=' + group.id);

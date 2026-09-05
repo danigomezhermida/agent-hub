@@ -8,6 +8,8 @@
   const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
   const MAX_TTS_TEXT = 8000;
   let popup = null;
+  let authorizationPending = false;
+  let connectionMessage = '';
   let verifiedScope = null;
   let live = false;
   let voiceLease = false;
@@ -127,6 +129,7 @@
     const data = event.data;
     if (!data || data.channel !== CHANNEL || data.channelId !== channelId) return;
     if (data.type === 'identity-denied') {
+      authorizationPending = false; connectionMessage = 'Esta cuenta no tiene acceso a Agent Hub.';
       const lostVoice = voiceLease;
       verifiedScope = null; authorized = false; localStorage.removeItem(AUTH_KEY);
       rejectPending('Esta cuenta no tiene acceso a Agent Hub.');
@@ -147,6 +150,7 @@
     if (data.type === 'ready') {
       live = Boolean(data.connected);
       if (live && !revoking) {
+        authorizationPending = false; connectionMessage = '';
         if (data.ownerScope === 'personal') verifiedScope = data.ownerScope;
         clearReadyTimer();
         authorized = true;
@@ -205,6 +209,10 @@
     if (popup && popup.closed) {
       const closed = popup;
       const unexpectedVoiceClose = voiceLease;
+      if (authorizationPending) {
+        authorizationPending = false;
+        connectionMessage = 'La ventana se cerró sin completar el acceso. Pulsa Conectar Hermes Cloud para volver a intentarlo.';
+      }
       rejectPending(item => pendingFailure(item, 'La ventana se cerró antes de enviar la operación. Puedes intentarlo de nuevo.'));
       finishVoiceOpen(false, 'La ventana de voz se cerró antes de conectar.');
       if (revokeWaiter?.target === closed) finishRevocation(false, 'Desconexión pendiente: la ventana se cerró sin confirmación.');
@@ -259,14 +267,20 @@
       return request('storage', {op,args}, 35000);
     },
     isLive: () => live,
+    connectionMessage: () => connectionMessage,
     isRevoking: () => revoking,
     open() {
       if (revoking) {
         const win = openPopup('?mode=revoke&revoke=1');
         win.focus(); post({ type: 'hello' }, win); return;
       }
-      const win = openPopup('?mode=authorize');
-      win.focus(); post({ type: 'hello' }, win);
+      authorizationPending = true; connectionMessage = '';
+      try {
+        const win = openPopup('?mode=authorize');
+        win.focus(); post({ type: 'hello' }, win);
+      } catch (error) {
+        authorizationPending = false; connectionMessage = error.message; changed(); throw error;
+      }
     },
     openVoice() {
       if (revoking) return Promise.reject(new Error('Completa la desconexión pendiente antes de continuar.'));
