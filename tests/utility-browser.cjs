@@ -43,6 +43,14 @@ const mock = `(()=>{
   await page.locator('#closeLoginBtn').click();
   assert.equal(await page.evaluate(()=>document.querySelector('.layout').inert),false);
   assert.equal(await page.locator('#loginOverlay').getAttribute('aria-hidden'),'true');
+  if(width<600){
+   await page.locator('#openSidebar').click();
+   const sidebarBackground=await page.locator('#sidebar').evaluate(el=>getComputedStyle(el).backgroundColor);
+   const alphaMatch=sidebarBackground.match(/^rgba?\([^)]*(?:,|\s\/\s)([\d.]+)\)$/);
+   const alpha=sidebarBackground.startsWith('rgba')&&alphaMatch?Number(alphaMatch[1]):1;
+   assert.equal(alpha,1,`mobile sidebar must be opaque, got ${sidebarBackground}`);
+   await page.keyboard.press('Escape');
+  }
   assert.deepEqual(errors,[]);await ctx.close();
   console.log(`ACCESS PASS ${width}px: real client modal/focus/cancel; external login page simulated, NO authenticated E2E.`);
 

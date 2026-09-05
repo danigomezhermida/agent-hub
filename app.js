@@ -78,6 +78,8 @@ function setSyncGate() {
   $('#recoverBtn').disabled = !ready || sending || Boolean(voiceUI?.busy);
   if (activeChat?.archived) ['#messageInput','#sendBtn','#micBtn','#voiceBtn'].forEach(id => $(id).disabled = true);
   $('#syncBtn').disabled = !window.hermesCloud.isConnected() || window.hermesCloud.isRevoking();
+  const reconnect = $('#reconnectNowBtn'); if (reconnect) reconnect.disabled = !window.hermesCloud.isConnected() || window.hermesCloud.isRevoking() || Boolean(voiceUI?.busy);
+  refreshReconnectCard();
 }
 function releaseMediaURLs() {
   for (const [element, url] of mediaURLs) { element.pause(); element.removeAttribute('src'); URL.revokeObjectURL(url); }
@@ -121,6 +123,59 @@ async function refreshSession() {
 }
 window.addEventListener('hermes-connection', refreshSession);
 window.addEventListener('hermes-attention', () => showToast('Hermes necesita tu intervención en su dashboard.'));
+let syncNowInFlight = false;
+function syncFromNow() {
+  if (syncNowInFlight || !window.hermesCloud.isConnected() || window.hermesCloud.isRevoking()) return Promise.resolve();
+  syncNowInFlight = true;
+  groupUI?.pauseObservation();
+  const operation = cloudSync.syncFromUserGesture();
+  operation.then(async () => {
+    setConn(true, 'Hermes sincronizado'); setSyncGate();
+    try {
+      await groupUI?.loadWithinLease();
+      const groupId = location.hash.startsWith('#group=') ? location.hash.slice(7) : '';
+      if (groupId) groupUI?.open(groupId);
+    } catch { /* El estado de grupos conserva el error real del catálogo. */ }
+  }).catch(error => {
+    if (error.code !== 'conflict') syncStatus({ state: 'error', message: error.message });
+  }).finally(() => { syncNowInFlight = false; if (!voiceUI?.busy) window.hermesCloud.closeSync?.(); });
+  return operation;
+}
+let firstGestureArmed = true;
+let firstGestureDisarm = null;
+function armFirstGestureSync() {
+  if (!firstGestureArmed) return;
+  // No abrimos ventanas desde un temporizador: esto se dispara dentro de un gesto real
+  // (pointerdown/touchend/keydown) y solo cuando hay permiso guardado aún sin verificar.
+  const needsSync = () => !loginIsOpen() && window.hermesCloud.isConnected() && !window.hermesCloud.isRevoking() && !syncReady();
+  if (!needsSync()) { firstGestureArmed = false; return; }
+  let fired = false;
+  const isOwnedControl = target => Boolean(target && target.closest && (target.closest('#logoutBtn') || target.closest('#connectBtn') || target.closest('#loginOverlay') || target.closest('#reconnectNowBtn') || target.closest('#syncBtn')));
+  const fire = (event) => {
+    if (fired) return; fired = true; firstGestureArmed = false;
+    cleanup();
+    if (needsSync() && !isOwnedControl(event.target)) syncFromNow();
+  };
+  const cleanup = () => {
+    document.removeEventListener('pointerdown', fire, true);
+    document.removeEventListener('touchend', fire, true);
+    document.removeEventListener('keydown', fire, true);
+    if (firstGestureDisarm === cleanup) firstGestureDisarm = null;
+  };
+  if (firstGestureDisarm) firstGestureDisarm();
+  document.addEventListener('pointerdown', fire, true);
+  document.addEventListener('touchend', fire, true);
+  document.addEventListener('keydown', fire, true);
+  firstGestureDisarm = cleanup;
+}
+function disarmFirstGestureSync() { if (firstGestureDisarm) firstGestureDisarm(); }
+function refreshReconnectCard() {
+  const card = $('#reconnectCard');
+  if (!card) return;
+  const show = !syncReady() && window.hermesCloud.isConnected() && !window.hermesCloud.isRevoking();
+  card.hidden = !show;
+  if (show) armFirstGestureSync(); else disarmFirstGestureSync();
+}
 function setConn(ok, text) {
   const dot = $('#connDot'); if (dot) dot.className = 'conn-dot' + (ok ? ' ok' : text === 'Comprobando…' ? '' : ' bad');
   const el = $('#connText'); if (el) el.textContent = text;
@@ -495,28 +550,16 @@ document.addEventListener('click', () => { $('#modelMenu').hidden = true; $('#ef
 document.querySelectorAll('#modelMenu button').forEach((b) => b.addEventListener('click', () => { selectedModel = b.dataset.model; save(); syncPills(); renderHome(); showToast(`Modelo: ${selectedModel}`); }));
 document.querySelectorAll('#effortMenu button').forEach((b) => b.addEventListener('click', () => { selectedEffort = b.dataset.effort; save(); syncPills(); renderHome(); showToast(`Esfuerzo: ${selectedEffort}`); }));
 
-$('#syncBtn').addEventListener('click', () => {
-  groupUI?.pauseObservation();
-  const operation = cloudSync.syncFromUserGesture();
-  operation.then(async () => {
-    setConn(true, 'Hermes sincronizado'); setSyncGate();
-    try {
-      await groupUI?.loadWithinLease();
-      const groupId = location.hash.startsWith('#group=') ? location.hash.slice(7) : '';
-      if (groupId) groupUI?.open(groupId);
-    } catch { /* El estado de grupos conserva el error real del catálogo. */ }
-  }).catch(error => {
-    if (error.code !== 'conflict') syncStatus({ state: 'error', message: error.message });
-  }).finally(() => { if (!voiceUI?.busy) window.hermesCloud.closeVoice?.(); });
-});
+$('#syncBtn').addEventListener('click', () => { syncFromNow(); });
+$('#reconnectNowBtn').addEventListener('click', () => { syncFromNow(); });
 $('#reloadRemoteBtn').addEventListener('click', () => {
   groupUI?.pauseObservation();
   let ready;
-  try { ready = window.hermesCloud.openVoice(); ready.catch(() => {}); }
+  try { ready = window.hermesCloud.openSync ? window.hermesCloud.openSync() : window.hermesCloud.openVoice(); ready.catch(() => {}); }
   catch (error) { showToast(error.message); return; }
   ready.then(async () => { await cloudSync.reloadRemote(); try { await groupUI?.loadWithinLease(); } catch {} })
     .catch(error => syncStatus({ state: 'error', message: error.message }))
-    .finally(() => { if (!voiceUI?.busy) window.hermesCloud.closeVoice?.(); });
+    .finally(() => { if (!voiceUI?.busy) window.hermesCloud.closeSync?.(); });
 });
 $('#loginForm').addEventListener('submit', e => {
   e.preventDefault();

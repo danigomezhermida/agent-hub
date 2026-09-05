@@ -13,8 +13,10 @@
   let verifiedScope = null;
   let live = false;
   let voiceLease = false;
+  let syncLease = false;
   let readyTimer = null;
   let voiceWaiter = null;
+  let syncWaiter = null;
   let revoking = localStorage.getItem(REVOKE_KEY) === '1';
   let authorized = !revoking && localStorage.getItem(AUTH_KEY) === '1';
   let channelId = crypto.randomUUID();
@@ -36,6 +38,14 @@
     voiceWaiter = null;
     if (ok) waiter.resolve(); else waiter.reject(new Error(message));
   }
+  function finishSyncOpen(ok, message) {
+    if (!syncWaiter) return;
+    clearTimeout(syncWaiter.timer);
+    const waiter = syncWaiter;
+    syncWaiter = null;
+    if (ok) waiter.resolve(); else waiter.reject(new Error(message));
+  }
+  function heldLease() { return voiceLease || syncLease; }
   function pendingFailure(item, fallback) {
     if (item?.kind === 'chat' && item.sent) return 'El turno puede haberse enviado. Comprueba Hermes antes de reenviar.';
     return fallback;
@@ -53,6 +63,7 @@
     popup = null;
     live = false;
     voiceLease = false;
+    syncLease = false;
     changed();
   }
   function openPopup(path = '') {
@@ -99,8 +110,10 @@
     revoking = true;
     live = false;
     voiceLease = false;
+    syncLease = false;
     clearReadyTimer();
     finishVoiceOpen(false, 'Desconexión solicitada.');
+    finishSyncOpen(false, 'Desconexión solicitada.');
     localStorage.removeItem(AUTH_KEY);
     localStorage.setItem(REVOKE_KEY, '1');
     rejectPending(item => pendingFailure(item, 'Desconexión solicitada.'));
@@ -134,6 +147,7 @@
       verifiedScope = null; authorized = false; localStorage.removeItem(AUTH_KEY);
       rejectPending('Esta cuenta no tiene acceso a Agent Hub.');
       finishVoiceOpen(false, 'Esta cuenta no tiene acceso a Agent Hub.');
+      finishSyncOpen(false, 'Esta cuenta no tiene acceso a Agent Hub.');
       const closing = popup; post({type:'close'}, closing); detach(closing);
       if (lostVoice) window.dispatchEvent(new Event('hermes-voice-closed'));
       window.dispatchEvent(new Event('hermes-identity-denied')); return;
@@ -156,8 +170,9 @@
         authorized = true;
         localStorage.setItem(AUTH_KEY, '1');
         finishVoiceOpen(true);
+        finishSyncOpen(true);
         dispatchQueued();
-        if (!voiceLease && pending.size === 0) {
+        if (!heldLease() && pending.size === 0) {
           const closing = popup;
           post({ type: 'close' }, closing);
           detach(closing);
@@ -200,7 +215,7 @@
       } else {
         item.reject(new Error('Hermes devolvió una respuesta de voz no válida.'));
       }
-      if (!voiceLease) detach(popup);
+      if (!heldLease()) detach(popup);
     }
   });
 
@@ -215,6 +230,7 @@
       }
       rejectPending(item => pendingFailure(item, 'La ventana se cerró antes de enviar la operación. Puedes intentarlo de nuevo.'));
       finishVoiceOpen(false, 'La ventana de voz se cerró antes de conectar.');
+      finishSyncOpen(false, 'La ventana de sincronización se cerró antes de conectar.');
       if (revokeWaiter?.target === closed) finishRevocation(false, 'Desconexión pendiente: la ventana se cerró sin confirmación.');
       detach(closed);
       if (unexpectedVoiceClose) window.dispatchEvent(new Event('hermes-voice-closed'));
@@ -226,7 +242,9 @@
     if (revoking) return Promise.reject(new Error('Completa la desconexión pendiente antes de continuar.'));
     if (!authorized) return Promise.reject(new Error('Conecta Hermes antes de enviar.'));
     if (pending.size) return Promise.reject(new Error('Espera a que termine la operación anterior.'));
-    if (kind !== 'chat' && (!voiceLease || !popup || popup.closed)) return Promise.reject(new Error('Abre primero la conexión de voz.'));
+    if (kind === 'storage') {
+      if (!heldLease() || !popup || popup.closed) return Promise.reject(new Error('Abre primero la conexión para sincronizar.'));
+    } else if (kind !== 'chat' && (!voiceLease || !popup || popup.closed)) return Promise.reject(new Error('Abre primero la conexión de voz.'));
     if (kind === 'chat' && (!voiceLease || !popup || popup.closed)) {
       try { openPopup('?mode=turn'); } catch (error) { return Promise.reject(error); }
     }
@@ -307,6 +325,41 @@
       voiceWaiter = { resolve: resolveOpen, reject: rejectOpen, timer, promise };
       post({ type: 'hello' }, win);
       return promise;
+    },
+    openSync() {
+      if (revoking) return Promise.reject(new Error('Completa la desconexión pendiente antes de continuar.'));
+      if (!authorized) return Promise.reject(new Error('Conecta Hermes antes de sincronizar.'));
+      if (syncLease && popup && !popup.closed) {
+        popup.focus(); post({ type: 'hello' });
+        return live ? Promise.resolve() : (syncWaiter?.promise || Promise.reject(new Error('La conexión aún no está lista.')));
+      }
+      if (popup && !popup.closed) return Promise.reject(new Error('Termina la operación actual antes de abrir la sincronización.'));
+      syncLease = true;
+      let win;
+      try { win = openPopup('?mode=sync'); }
+      catch (error) { syncLease = false; return Promise.reject(error); }
+      win.focus();
+      let resolveOpen, rejectOpen;
+      const promise = new Promise((resolve, reject) => { resolveOpen = resolve; rejectOpen = reject; });
+      const timer = setTimeout(() => {
+        if (!syncWaiter) return;
+        syncWaiter = null;
+        post({ type: 'close' }, win);
+        detach(win);
+        rejectOpen(new Error('Hermes no confirmó la conexión de sincronización a tiempo.'));
+      }, 15000);
+      syncWaiter = { resolve: resolveOpen, reject: rejectOpen, timer, promise };
+      post({ type: 'hello' }, win);
+      return promise;
+    },
+    closeSync() {
+      if (!syncLease) return;
+      const closing = popup;
+      syncLease = false;
+      rejectPending(item => pendingFailure(item, 'Conexión de sincronización cerrada.'));
+      finishSyncOpen(false, 'Conexión de sincronización cerrada.');
+      post({ type: 'close' }, closing);
+      detach(closing);
     },
     closeVoice() {
       if (!voiceLease) return;

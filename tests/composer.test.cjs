@@ -139,3 +139,38 @@ test('Enter creates exactly one independent conversation and preserves settings'
  await b.reply();assert.match(b.$('#messageList').textContent,/Respuesta de prueba/);
  }finally{b.dom.window.close();}
 });
+
+
+test('reconnect card appears when auth saved but not synced and its single button syncs without the sidebar', async () => {
+  const b = boot(); // auth=true, hermesCloud connected, but cloudSync not ready yet
+  try {
+    const card = b.$('#reconnectCard');
+    assert.equal(card.hidden, false, 'card visible on first load with saved auth');
+    // Simulated: nothing sync-ready yet, so inputs remain gated.
+    assert.equal(b.$('#heroInput').disabled, true);
+    b.$('#reconnectNowBtn').click();
+    await b.waitFor(() => !b.w.document.body.classList.contains('sync-locked'));
+    assert.equal(card.hidden, true, 'card hides after syncing');
+    assert.equal(b.$('#heroInput').disabled, false);
+  } finally { b.dom.window.close(); }
+});
+
+test('first real pointerdown auto-syncs when auth saved but not synced (single gesture)', async () => {
+  const b = boot();
+  try {
+    assert.equal(b.$('#reconnectCard').hidden, false);
+    // First touch anywhere on the main surface (not an owned control) should verify+sync.
+    const target = b.$('#greeting');
+    target.dispatchEvent(new b.w.PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 1 }));
+    await b.waitFor(() => !b.w.document.body.classList.contains('sync-locked'));
+    assert.equal(b.$('#reconnectCard').hidden, true);
+  } finally { b.dom.window.close(); }
+});
+
+test('login overlay is not replaced by the reconnect flow when not connected', () => {
+  const b = boot(false);
+  try {
+    assert.equal(b.$('#reconnectCard').hidden, true, 'no reconnect card when no saved auth');
+    assert.equal(b.$('#loginOverlay').classList.contains('open'), true);
+  } finally { b.dom.window.close(); }
+});

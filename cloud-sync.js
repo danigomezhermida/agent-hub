@@ -217,7 +217,7 @@
   CloudSync.prototype.syncFromUserGesture = function () {
     // Do not move this open into a promise callback: popup creation needs activation.
     var opened;
-    try { opened = this.transport.openVoice(); }
+    try { opened = this.transport.openSync ? this.transport.openSync() : this.transport.openVoice(); }
     catch (error) { return Promise.reject(error); }
     var self = this;
     return this._enqueue(async function () { await opened; return self._initialSync(); });

@@ -236,3 +236,69 @@ test('service worker excludes APIs and foreign origins', () => {
   assert.match(sw, /url\.pathname\.startsWith\('\/api\/'\)/);
   assert.match(sw, /url\.origin !== self\.location\.origin/);
 });
+
+// Lightweight sync lease: storage over HTTP, no voice socket required.
+test('openSync runs storage over a mode=sync popup and closeSync closes it', async () => {
+  const h = clientHarness(); authorize(h);
+  const opened = h.api.openSync(); const popup = h.popups.at(-1);
+  assert.match(popup.url, /mode=sync/);
+  h.tick(); receive(h, popup, { type: 'ready', connected: true, ownerScope: 'personal' });
+  await opened;
+  assert.equal(h.api.isLive(), true);
+  const promise = h.api.storage('getState', {});
+  const request = [...h.sent].reverse().find(item => item.popup === popup && item.data.type === 'storage');
+  assert.equal(request.data.op, 'getState');
+  receive(h, popup, { type: 'result', requestId: request.data.requestId, ok: true, result: { revision: 0, snapshot: {} } });
+  assert.deepEqual(await promise, { revision: 0, snapshot: {} });
+  // The popup stays open across the storage batch (no auto-detach while the sync lease is held).
+  assert.equal(h.popups.at(-1), popup);
+  h.api.closeSync();
+  assert.equal(h.api.isLive(), false);
+  assert.ok(h.sent.some(item => item.popup === popup && item.data.type === 'close'));
+});
+
+test('sync lease is independent: chat after closeSync opens a fresh window', async () => {
+  const h = clientHarness(); authorize(h);
+  const opened = h.api.openSync(); const syncPopup = h.popups.at(-1);
+  h.tick(); receive(h, syncPopup, { type: 'ready', connected: true, ownerScope: 'personal' });
+  await opened; h.api.closeSync();
+  const chatPromise = h.api.chat({ message: 'hola', chatId: 'chat_1' });
+  const chatPopup = h.popups.at(-1);
+  assert.notEqual(chatPopup, syncPopup);
+  h.tick(); receive(h, chatPopup, { type: 'ready', connected: true, ownerScope: 'personal' });
+  const request = [...h.sent].reverse().find(item => item.popup === chatPopup && item.data.type === 'chat');
+  receive(h, chatPopup, { type: 'result', requestId: request.data.requestId, ok: true, result: { text: 'hola' } });
+  assert.equal((await chatPromise).text, 'hola');
+});
+
+// Connector: mode=sync verifies owner over HTTP (no socket) and reports connected.
+test('connector sync mode verifies owner over HTTP without a websocket and stays open', async () => {
+  const h = connectorHarness('?mode=sync', true);
+  for (let i = 0; i < 10 && !h.fetchCount(); i++) await flush();
+  assert.ok(h.fetchCount() > 0, 'identity verified over HTTP');
+  assert.equal(h.sockets.length, 0, 'no websocket opened for sync mode');
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'sync_1', type: 'hello' } });
+  await flush(); await flush();
+  const ready = h.posts.find(item => item.data.type === 'ready' && item.data.channelId === 'sync_1');
+  assert.ok(ready, 'announces ready on hello');
+  assert.equal(ready.data.connected, true);
+  assert.equal(ready.data.ownerScope, 'personal');
+});
+
+test('connector sync mode popup stays open after hello and closes only on explicit close', async () => {
+  const h = connectorHarness('?mode=sync', true);
+  for (let i = 0; i < 10 && !h.fetchCount(); i++) await flush();
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'sync_2', type: 'hello' } });
+  await flush(); await flush();
+  const ready = h.posts.find(item => item.data.type === 'ready' && item.data.channelId === 'sync_2');
+  assert.ok(ready && ready.data.connected === true);
+  // Sync mode is not temporary: no auto-close after hello.
+  const closed = { value: false };
+  h.context.window.close = () => { closed.value = true; };
+  await new Promise(resolve => setTimeout(resolve, 420));
+  assert.equal(closed.value, false, 'sync popup stays open awaiting storage');
+  // Explicit close forces the sync popup closed.
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'sync_2', type: 'close' } });
+  await new Promise(resolve => setTimeout(resolve, 420));
+  assert.equal(closed.value, true);
+});

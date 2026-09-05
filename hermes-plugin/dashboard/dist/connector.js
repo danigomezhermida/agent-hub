@@ -13,6 +13,7 @@
   const params = new URLSearchParams(location.search);
   const revokeMode = params.get('mode') === 'revoke' || params.get('revoke') === '1';
   const voiceMode = params.get('mode') === 'voice';
+  const syncMode = params.get('mode') === 'sync';
   const idOK = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
   let allowed = localStorage.getItem(GRANT_KEY) === '1';
   let ownerScope = null;
@@ -30,7 +31,7 @@
   const post = data => {
     if (parentWindow && channelId) parentWindow.postMessage({ channel: CHANNEL, channelId, ...data }, APP);
   };
-  const announce = () => post({ type: 'ready', connected: allowed && Boolean(ownerScope) && socket?.readyState === 1, profile: PROFILE, ownerScope });
+  const announce = () => post({ type: 'ready', connected: allowed && Boolean(ownerScope) && (syncMode || socket?.readyState === 1), profile: PROFILE, ownerScope });
   const closeSoon = (force = false) => {
     const mode = params.get('mode');
     const temporary = ['authorize', 'turn', 'revoke'].includes(mode) || revokeMode;
@@ -337,6 +338,10 @@
     if (data.type === 'hello') {
       channelId = data.channelId;
       if (revokeMode) { post({ type: 'revoked' }); closeSoon(); }
+      else if (syncMode) {
+        status('Verificando tu cuenta para sincronizar…');
+        verifyOwner().then(() => announce()).catch(error => { if (!document.querySelector('#status a')) status(error.message); announce(); });
+      }
       else announce();
       return;
     }
@@ -349,7 +354,7 @@
       return;
     }
     if (data.type === 'close') {
-      if (voiceMode) { stop(); closeSoon(true); }
+      if (voiceMode || syncMode) { stop(); closeSoon(true); }
       else closeSoon();
       return;
     }
@@ -403,6 +408,9 @@
   if (revokeMode) {
     stop({ revoke: true });
     status('Autorización eliminada. Confirmando la revocación con Agent Hub…');
+  } else if (allowed && syncMode) {
+    status('Verificando tu cuenta para sincronizar…');
+    verifyOwner().then(() => { announce(); }).catch(error => { if (!document.querySelector('#status a')) status(error.message); });
   } else if (allowed && ['turn', 'voice'].includes(params.get('mode'))) {
     status(voiceMode ? 'Conexión de voz activa. Mantén esta ventana abierta…' : 'Autorización conservada. Conectando solo para este turno…');
     connect().then(() => { announce(); }).catch(error => status(error.message));

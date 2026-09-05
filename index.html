@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260905-9" />
+  <link rel="stylesheet" href="styles.css?v=20260905-10" />
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebApplication","name":"Agent Hub Limpatex","applicationCategory":"BusinessApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0"}}
   </script>
@@ -66,6 +66,13 @@
       </header>
 
       <section class="home" id="viewHome" aria-label="Inicio">
+        <div class="reconnect-card" id="reconnectCard" hidden role="status">
+          <div class="reconnect-text">
+            <strong>Tu cuenta Hermes está guardada</strong>
+            <span>Verifícala y sincroniza para mostrar tu historial.</span>
+          </div>
+          <button class="sync-btn" id="reconnectNowBtn" type="button">Conectar y sincronizar</button>
+        </div>
         <h1 class="wordmark">Agent Hub</h1>
         <p class="greeting" id="greeting">¿En qué trabajamos hoy?</p>
         <div class="composer composer-hero">
@@ -212,13 +219,13 @@
     <p class="voice-privacy">Audio guardado en este dispositivo y sincronizado con tu cuenta personal verificada. Transcripción y voz mediante Hermes. Durante la llamada mantén abierta su ventana. Usa auriculares para reducir el eco.</p>
   </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script src="cloud-connection.js?v=20260905-9"></script>
+  <script src="cloud-connection.js?v=20260905-11"></script>
   <script src="recovery-ui.js?v=20260905-9"></script>
-  <script src="cloud-sync.js?v=20260905-9"></script>
+  <script src="cloud-sync.js?v=20260905-11"></script>
   <script src="voice-engine.js?v=20260905-9"></script>
   <script src="voice-ui.js?v=20260905-9"></script>
   <script src="safe-content.js?v=20260905-9"></script>
   <script src="groups-ui.js?v=20260905-9"></script>
-  <script src="app.js?v=20260905-9"></script>
+  <script src="app.js?v=20260905-11"></script>
 </body>
 </html>
