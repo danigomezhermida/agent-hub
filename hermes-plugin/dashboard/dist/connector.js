@@ -7,6 +7,7 @@
   const SESSION_KEY = 'agenthub.connector.sessions.v1';
   const GRANT_KEY = 'agenthub.connector.granted.v1';
   const params = new URLSearchParams(location.search);
+  const revokeMode = params.get('mode') === 'revoke' || params.get('revoke') === '1';
   const idOK = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
   let allowed = localStorage.getItem(GRANT_KEY) === '1';
   let socket = null, connecting = null, sequence = 0, channelId = '';
@@ -26,24 +27,28 @@
   const announce = () => post({ type: 'ready', connected: allowed && socket?.readyState === 1, profile: PROFILE });
   const closeSoon = () => {
     const mode = params.get('mode');
-    const temporary = ['authorize', 'turn', 'revoke'].includes(mode) || params.get('revoke') === '1';
+    const temporary = ['authorize', 'turn', 'revoke'].includes(mode) || revokeMode;
     if (!parentWindow || !temporary) return;
     setTimeout(() => { try { window.close(); } catch {} }, 350);
   };
+
+  function failOutstanding(message) {
+    for (const item of calls.values()) { clearTimeout(item.timer); item.reject(new Error(message)); }
+    calls.clear();
+    for (const item of turns.values()) {
+      clearTimeout(item.timer);
+      item.reject(new Error(message));
+    }
+    turns.clear();
+    live.clear();
+  }
 
   function stop({ revoke = false } = {}) {
     if (revoke) {
       allowed = false;
       localStorage.removeItem(GRANT_KEY);
     }
-    for (const item of calls.values()) { clearTimeout(item.timer); item.reject(new Error('Conexión cerrada')); }
-    calls.clear();
-    for (const item of turns.values()) {
-      clearTimeout(item.timer);
-      item.reject(new Error('Conexión cerrada durante el turno. No reenvíes sin comprobar Hermes.'));
-    }
-    turns.clear();
-    live.clear();
+    failOutstanding('Conexión cerrada durante el turno. No reenvíes sin comprobar Hermes.');
     if (socket) {
       const current = socket;
       socket = null;
@@ -74,7 +79,14 @@
         const timeout = setTimeout(() => { ws.close(); reject(new Error('Hermes no abrió la conexión.')); }, 15000);
         ws.onopen = () => { clearTimeout(timeout); resolve(); };
         ws.onerror = () => { clearTimeout(timeout); reject(new Error('Error de conexión WebSocket.')); };
-        ws.onclose = () => { clearTimeout(timeout); if (socket === ws) socket = null; };
+        ws.onclose = () => {
+          clearTimeout(timeout);
+          reject(new Error('Hermes cerró la conexión WebSocket.'));
+          if (socket === ws) {
+            socket = null;
+            failOutstanding('La conexión WebSocket se cerró durante la operación. Comprueba Hermes antes de reenviar.');
+          }
+        };
         ws.onmessage = ({ data }) => {
           for (const line of String(data).split('\n').filter(Boolean)) {
             let frame; try { frame = JSON.parse(line); } catch { continue; }
@@ -163,7 +175,8 @@
     if (!idOK(data.channelId)) return;
     if (data.type === 'hello') {
       channelId = data.channelId;
-      announce();
+      if (revokeMode) { post({ type: 'revoked' }); closeSoon(); }
+      else announce();
       return;
     }
     if (data.channelId !== channelId) return;
@@ -211,13 +224,13 @@
     } finally { button.disabled = false; }
   };
 
-  if (params.get('revoke') === '1') {
+  if (revokeMode) {
     stop({ revoke: true });
-    post({ type: 'revoked' });
-    status('Autorización eliminada.');
-    closeSoon();
-  } else if (allowed) {
+    status('Autorización eliminada. Confirmando la revocación con Agent Hub…');
+  } else if (allowed && params.get('mode') === 'turn') {
     status('Autorización conservada. Conectando solo para este turno…');
     connect().then(() => { announce(); }).catch(error => status(error.message));
+  } else if (allowed) {
+    status('Existe una autorización anterior. Pulsa Conectar Agent Hub para confirmarla de nuevo.');
   }
 })();

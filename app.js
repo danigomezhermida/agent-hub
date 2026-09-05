@@ -56,6 +56,9 @@ function showToast(msg) { const t = $('#toast'); t.textContent = msg; t.classLis
 
 /* ---------- session / connection ---------- */
 async function refreshSession() {
+  if (window.hermesCloud.isRevoking()) {
+    $('#loginOverlay').classList.remove('open'); setConn(false, 'Desconexión pendiente'); return false;
+  }
   if (window.hermesCloud.isConnected()) {
     $('#loginOverlay').classList.remove('open'); setConn(true, window.hermesCloud.isLive() ? 'Hermes conectado' : 'Hermes autorizado'); return true;
   }
@@ -300,7 +303,11 @@ $('#loginForm').addEventListener('submit', e => {
   try { window.hermesCloud.open(); $('#loginStatus').textContent = 'Pulsa Conectar en la ventana de Hermes y vuelve aquí.'; }
   catch (error) { $('#loginStatus').textContent = error.message; }
 });
-$('#logoutBtn').addEventListener('click', () => window.hermesCloud.disconnect());
+$('#logoutBtn').addEventListener('click', async () => {
+  try { await window.hermesCloud.disconnect(); showToast('Conexión con Hermes revocada.'); }
+  catch (error) { showToast(error.message); }
+  refreshSession();
+});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeDialog(); if (activeChat) closeChat(); document.body.classList.remove('side-open'); }
   if ((e.key.toLowerCase() === 'n' || e.key.toLowerCase() === 'k') && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) startNewChat();
@@ -308,4 +315,4 @@ document.addEventListener('keydown', (e) => {
 
 ['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = true; $(id).title = 'Audio y voz pendientes de conexión'; });
 syncPills(); renderLists(); renderHome(); showHome(); refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-2').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-3').catch(() => {}));

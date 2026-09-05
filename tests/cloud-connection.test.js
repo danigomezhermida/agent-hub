@@ -3,105 +3,186 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const crypto = require('node:crypto').webcrypto;
-const source = fs.readFileSync('cloud-connection.js', 'utf8');
+const clientSource = fs.readFileSync('cloud-connection.js', 'utf8');
+const connectorSource = fs.readFileSync('hermes-plugin/dashboard/dist/connector.js', 'utf8');
 
-function setup() {
+function clientHarness() {
   const listeners = {}, sent = [], popups = [], store = new Map();
-  let tick;
-  const localStorage = {
-    getItem: key => store.has(key) ? store.get(key) : null,
-    setItem: (key, value) => store.set(key, String(value)),
-    removeItem: key => store.delete(key)
+  let tick, blockOpen = false;
+  const context = {
+    crypto,
+    Event: class { constructor(type) { this.type = type; } },
+    localStorage: {
+      getItem: key => store.has(key) ? store.get(key) : null,
+      setItem: (key, value) => store.set(key, String(value)),
+      removeItem: key => store.delete(key)
+    },
+    setTimeout, clearTimeout,
+    setInterval(fn) { tick = fn; return 1; },
+    clearInterval() {},
+    console
   };
-  const window = {
-    addEventListener: (name, fn) => { listeners[name] = fn; },
-    dispatchEvent() {},
-    open: url => {
-      const popup = { url, closed: false, postMessage: (data, origin) => sent.push({ popup, data, origin }), focus() {} };
-      popups.push(popup);
-      return popup;
-    }
+  context.window = context;
+  context.window.addEventListener = (type, fn) => { listeners[type] = fn; };
+  context.window.dispatchEvent = () => {};
+  context.window.open = (url, name) => {
+    if (blockOpen) return null;
+    const popup = { url, name, closed: false, focus() {}, postMessage(data, origin) { sent.push({ popup, data, origin }); } };
+    popups.push(popup);
+    return popup;
   };
-  vm.runInNewContext(source, { window, localStorage, crypto, Event: class {}, Map, Date, Error, Promise, setInterval: fn => { tick = fn; }, setTimeout, clearTimeout });
-  return { api: window.hermesCloud, listeners, popups, sent, store, tick };
+  vm.runInNewContext(clientSource, context);
+  return { api: context.window.hermesCloud, context, listeners, sent, popups, store, tick: () => tick(), block: value => { blockOpen = value; } };
 }
-function ready(x, popup) {
-  const hello = [...x.sent].reverse().find(item => item.popup === popup && item.data.type === 'hello');
-  assert.ok(hello);
-  x.listeners.message({ origin: hello.origin, source: popup, data: { channel: hello.data.channel, channelId: hello.data.channelId, type: 'ready', connected: true } });
+function helloFor(h, popup) {
+  return [...h.sent].reverse().find(item => item.popup === popup && item.data.type === 'hello');
+}
+function receive(h, popup, data, overrides = {}) {
+  const hello = helloFor(h, popup);
+  h.listeners.message({ origin: hello.origin, source: popup, data: { channel: hello.data.channel, channelId: hello.data.channelId, ...data }, ...overrides });
   return hello;
 }
+function authorize(h) {
+  h.api.open(); h.tick(); const popup = h.popups.at(-1);
+  receive(h, popup, { type: 'ready', connected: true });
+  return popup;
+}
 
-test('rejects forged origin and source', () => {
-  const x = setup(); x.api.open(); x.tick(); const popup = x.popups[0];
-  const hello = x.sent[0];
-  x.listeners.message({ origin: 'https://evil.example', source: popup, data: { ...hello.data, type: 'ready', connected: true } });
-  assert.equal(x.api.isConnected(), false);
-  x.listeners.message({ origin: hello.origin, source: {}, data: { ...hello.data, type: 'ready', connected: true } });
-  assert.equal(x.api.isConnected(), false);
+function connectorHarness(search = '?mode=turn', seededGrant = true) {
+  const listeners = {}, posts = [], store = new Map(), sockets = [], elements = {};
+  if (seededGrant) store.set('agenthub.connector.granted.v1', '1');
+  for (const id of ['status', 'connect', 'disconnect', 'prompt', 'test', 'reply']) {
+    elements[id] = { hidden: false, textContent: '', value: '', disabled: false, onclick: null, append() {} };
+  }
+  const parentWindow = { closed: false, postMessage(data, origin) { posts.push({ data, origin }); } };
+  let fetchCount = 0;
+  class MockWebSocket {
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; sockets.push(this); }
+    send(data) { this.sent.push(JSON.parse(data)); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+    open() { this.readyState = 1; this.onopen(); }
+    frame(frame) { this.onmessage({ data: JSON.stringify(frame) }); }
+  }
+  const context = {
+    crypto, URLSearchParams, Map, Set, JSON, Error, Promise, encodeURIComponent,
+    location: { search, protocol: 'https:', host: 'future-rich-0308.agents.nousresearch.com', pathname: '/connector' },
+    document: {
+      getElementById: id => elements[id],
+      querySelector: () => null,
+      createElement: () => ({ textContent: '', href: '' })
+    },
+    localStorage: {
+      getItem: key => store.has(key) ? store.get(key) : null,
+      setItem: (key, value) => store.set(key, String(value)),
+      removeItem: key => store.delete(key)
+    },
+    fetch: async () => { fetchCount += 1; return { ok: true, status: 200, json: async () => ({ ticket: 'opaque-test-ticket' }) }; },
+    WebSocket: MockWebSocket,
+    setTimeout, clearTimeout, setInterval() {}, console
+  };
+  context.window = context;
+  context.opener = parentWindow;
+  context.addEventListener = (type, fn) => { listeners[type] = fn; };
+  context.close = () => {};
+  vm.runInNewContext(connectorSource, context);
+  return { context, listeners, posts, store, sockets, elements, parentWindow, fetchCount: () => fetchCount };
+}
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+// Client security and lifecycle
+test('rejects forged origin, source and channel id', () => {
+  const h = clientHarness(); h.api.open(); h.tick(); const popup = h.popups[0]; const hello = helloFor(h, popup);
+  const good = { channel: hello.data.channel, channelId: hello.data.channelId, type: 'ready', connected: true };
+  h.listeners.message({ origin: 'https://evil.example', source: popup, data: good });
+  h.listeners.message({ origin: hello.origin, source: {}, data: good });
+  h.listeners.message({ origin: hello.origin, source: popup, data: { ...good, channelId: 'forged' } });
+  assert.equal(h.api.isConnected(), false);
 });
 
-test('authorization survives closing the connection window', () => {
-  const x = setup(); x.api.open(); x.tick(); const popup = x.popups[0];
+test('authorization persists and closes only after ready acknowledgement', () => {
+  const h = clientHarness(); const popup = authorize(h);
+  assert.equal(h.api.isConnected(), true);
+  assert.equal(h.api.isLive(), false);
+  assert.ok(h.sent.some(item => item.popup === popup && item.data.type === 'close'));
   assert.match(popup.url, /mode=authorize/);
-  ready(x, popup);
-  assert.ok(x.sent.some(item => item.data.type === 'close'));
-  assert.equal(x.api.isConnected(), true);
-  popup.closed = true; x.tick();
-  assert.equal(x.api.isConnected(), true);
-  assert.equal(x.api.isLive(), false);
 });
 
-test('each chat reopens a temporary connector and resolves exact response', async () => {
-  const x = setup(); x.api.open(); x.tick(); let popup = x.popups[0]; ready(x, popup);
-  popup.closed = true; x.tick();
-  const result = x.api.chat({ message: 'hola', chatId: 'chat_1', model: 'default', effort: 'low' });
-  popup = x.popups[1]; x.tick(); const hello = ready(x, popup);
-  const request = [...x.sent].reverse().find(item => item.popup === popup && item.data.type === 'chat');
-  assert.equal(request.origin, hello.origin);
-  x.listeners.message({ origin: request.origin, source: popup, data: { channel: request.data.channel, channelId: request.data.channelId, type: 'result', requestId: request.data.requestId, ok: true, result: { text: 'respuesta real' } } });
-  assert.equal((await result).text, 'respuesta real');
+test('popup closed before ready rejects queued message immediately', async () => {
+  const h = clientHarness(); authorize(h);
+  const promise = h.api.chat({ message: 'hola', chatId: 'chat_1' });
+  const popup = h.popups.at(-1); popup.closed = true; h.tick();
+  await assert.rejects(promise, /antes de enviar/);
 });
 
-test('disconnect removes persisted authorization', () => {
-  const x = setup(); x.api.open(); x.tick(); const popup = x.popups[0]; ready(x, popup);
-  x.api.disconnect();
-  assert.equal(x.api.isConnected(), false);
-  const revokedByMessage = x.sent.some(item => item.data.type === 'disconnect');
-  const revokedByUrl = x.popups.some(item => /revoke=1/.test(item.url));
-  assert.ok(revokedByMessage || revokedByUrl);
+test('completed result detaches old popup and next turn uses a unique window', async () => {
+  const h = clientHarness(); authorize(h);
+  const first = h.api.chat({ message: 'uno', chatId: 'chat_1' });
+  const popup1 = h.popups.at(-1); h.tick(); receive(h, popup1, { type: 'ready', connected: true });
+  const req1 = [...h.sent].reverse().find(item => item.popup === popup1 && item.data.type === 'chat');
+  receive(h, popup1, { type: 'result', requestId: req1.data.requestId, ok: true, result: { text: 'uno' } });
+  assert.equal((await first).text, 'uno');
+  const second = h.api.chat({ message: 'dos', chatId: 'chat_1' });
+  const popup2 = h.popups.at(-1);
+  assert.notEqual(popup2, popup1);
+  assert.notEqual(popup2.name, popup1.name);
+  h.tick(); receive(h, popup2, { type: 'ready', connected: true });
+  const req2 = [...h.sent].reverse().find(item => item.popup === popup2 && item.data.type === 'chat');
+  receive(h, popup2, { type: 'result', requestId: req2.data.requestId, ok: true, result: { text: 'dos' } });
+  assert.equal((await second).text, 'dos');
 });
 
-test('service worker excludes API and foreign origins', () => {
+test('failed remote revocation remains fail-closed and cannot reconnect silently', async () => {
+  const h = clientHarness(); authorize(h); h.block(true);
+  await assert.rejects(h.api.disconnect(), /Desconexión pendiente/);
+  assert.equal(h.api.isConnected(), false);
+  assert.equal(h.api.isRevoking(), true);
+  assert.equal(h.store.get('agenthub.hermes.revoking.v1'), '1');
+  assert.throws(() => h.api.open(), /ventana emergente/);
+});
+
+test('confirmed remote revocation clears pending state', async () => {
+  const h = clientHarness(); authorize(h);
+  const promise = h.api.disconnect(); const popup = h.popups.at(-1); h.tick();
+  receive(h, popup, { type: 'revoked' });
+  await promise;
+  assert.equal(h.api.isConnected(), false);
+  assert.equal(h.api.isRevoking(), false);
+});
+
+// Connector fail-closed behavior
+test('authorize mode with an old grant still requires an explicit click', async () => {
+  const h = connectorHarness('?mode=authorize', true); await flush();
+  assert.equal(h.fetchCount(), 0);
+  assert.match(h.elements.status.textContent, /Pulsa Conectar/);
+  assert.equal(typeof h.elements.connect.onclick, 'function');
+});
+
+test('revoke mode clears Hermes grant and confirms only after channel hello', () => {
+  const h = connectorHarness('?mode=revoke&revoke=1', true);
+  assert.equal(h.store.has('agenthub.connector.granted.v1'), false);
+  assert.equal(h.posts.length, 0);
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'revoke_1', type: 'hello' } });
+  assert.ok(h.posts.some(item => item.data.type === 'revoked' && item.data.channelId === 'revoke_1'));
+});
+
+test('websocket closure rejects an outstanding turn without waiting for timeout', async () => {
+  const h = connectorHarness('?mode=turn', true); await flush();
+  const ws = h.sockets[0]; ws.open(); await flush();
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'turn_1', type: 'hello' } });
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'turn_1', type: 'chat', requestId: 'req_1', chatId: 'chat_1', message: 'hola', model: 'default', effort: 'low' } });
+  await flush();
+  const create = ws.sent.find(frame => frame.method === 'session.create');
+  ws.frame({ jsonrpc: '2.0', id: create.id, result: { session_id: 'live_1', stored_session_id: 'stored_1' } });
+  await flush();
+  assert.ok(ws.sent.some(frame => frame.method === 'prompt.submit'));
+  ws.readyState = 3; ws.onclose(); await flush(); await flush();
+  const result = h.posts.find(item => item.data.type === 'result' && item.data.requestId === 'req_1');
+  assert.equal(result.data.ok, false);
+  assert.match(result.data.error, /WebSocket|conexión/i);
+});
+
+test('service worker excludes APIs and foreign origins', () => {
   const sw = fs.readFileSync('sw.js', 'utf8');
   assert.match(sw, /url\.pathname\.startsWith\('\/api\/'\)/);
   assert.match(sw, /url\.origin !== self\.location\.origin/);
-});
-
-test('connector starts and registers controls in a browser-like global', () => {
-  const connector = fs.readFileSync('/opt/data/plugins/agent-hub/dashboard/dist/connector.js', 'utf8');
-  const handlers = {}, elements = {};
-  for (const id of ['status', 'connect', 'disconnect', 'prompt', 'test', 'reply']) {
-    elements[id] = { hidden: false, textContent: '', value: '', addEventListener: (name, fn) => { handlers[id + ':' + name] = fn; } };
-  }
-  const store = new Map();
-  const context = {
-    crypto, location: { search: '' }, URLSearchParams, Map, Set, JSON, Error, Promise,
-    document: { getElementById: id => elements[id] },
-    localStorage: { getItem: key => store.get(key) || null, setItem: (key, value) => store.set(key, String(value)), removeItem: key => store.delete(key) },
-    addEventListener() {}, setInterval() {}, setTimeout, clearTimeout, fetch() { throw new Error('not called'); }, WebSocket: class {}
-  };
-  context.window = context;
-  Object.defineProperty(context, 'opener', { value: null, configurable: false });
-  vm.runInNewContext(connector, context);
-  assert.equal(typeof elements.connect.onclick, 'function');
-  assert.equal(typeof elements.disconnect.onclick, 'function');
-  assert.equal(typeof elements.test.onclick, 'function');
-});
-
-test('connector persists grant and auto-closes after a turn', () => {
-  const connector = fs.readFileSync('/opt/data/plugins/agent-hub/dashboard/dist/connector.js', 'utf8');
-  assert.match(connector, /agenthub\.connector\.granted\.v1/);
-  assert.match(connector, /window\.close\(\)/);
-  assert.match(source, /mode=turn/);
 });
