@@ -1,7 +1,7 @@
 # Agent Hub — correcciones de utilidad móvil
 
 ## Estado de entrega
-Correcciones locales completas y verificadas en la rama `fix/mobile-utility` del repositorio `/opt/data/agent-hub-github-sync-1788531677`. No se ha hecho commit, push, despliegue, migración ni modificación del backend instalado. Producción no incluye estas correcciones todavía.
+Correcciones publicadas en `main` y servidas por `https://agent-hub-theta-five.vercel.app`. El despliegue no incluye migraciones, cambios del backend instalado ni modificaciones del runtime de Hermes.
 
 ## Problema resuelto y comportamiento nuevo
 
@@ -40,9 +40,10 @@ Durante integración se cerraron también regresiones con pruebas: temporizador 
 - Capturas finales de 390 px inspeccionadas visualmente; no solo comprobación de overflow.
 - `git diff --check`: PASS sin errores.
 - Revisión independiente del núcleo: PASS (`deleg_6fe8436f`). Revisión independiente posterior de geometría/compositor y recorrido final: PASS (`deleg_00de79e1`), con repetición de las 127 pruebas y del recorrido de utilidad.
+- Producción canónica: HTML y `index.html`, `app.js`, `cloud-connection.js`, `groups-ui.js`, `safe-content.js`, `styles.css` y `sw.js` coinciden byte por byte con `main`. Smoke público sin mocks: PASS en 390 y 1280 px; shell no autenticada.
 
 ## Límites y siguientes pasos
-- Esta entrega es **local**, no está desplegada. Integrar/publicar requiere una orden explícita para esta corrección.
+- Las correcciones están publicadas. Una reversión puede realizarse volviendo al commit de producción anterior `16bd6cc`.
 - No se ha repetido una sesión E2E autenticada contra producción para estas correcciones. No se ha eludido el login ni usado credenciales de pruebas como si fueran una cuenta real.
 - Pendiente teléfono físico: teclado y viewport reales, micrófono/permisos, suspensión, regreso desde la ventana de Hermes y PWA instalada. Las capturas son emulación de Chromium.
 - Historial limitado a las 20 ejecuciones más recientes que expone la API actual; no hay paginación adicional ni búsqueda global nueva.
