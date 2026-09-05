@@ -17,12 +17,17 @@ const storage = { chats: 'agenthub.chats.v1', groups: 'agenthub.groups.v1', mess
 const read = (key, fallback) => { try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) ?? fallback) : fallback; } catch { return fallback; } };
 const $ = (id) => document.querySelector(id);
 const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
-const isMobile = () => window.matchMedia('(max-width: 760px)').matches();
+const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
 
-let chats = read(storage.chats, seedChats);
+const snapshotKey = 'agenthub.conversations.v3';
+const snapshot = read(snapshotKey, null);
+let chats = snapshot?.chats || read(storage.chats, seedChats);
 let groups = read(storage.groups, seedGroups);
-let messages = read(storage.messages, {});
-let sessions = read(storage.sessions, {});
+let messages = snapshot?.messages || read(storage.messages, {});
+let sessions = snapshot?.sessions || read(storage.sessions, {});
+let sending = false;
+const draftKey = 'agenthub.drafts.v1';
+const drafts = read(draftKey, {});
 let selectedModel = localStorage.getItem('agenthub.model.sso.v1') || 'default';
 let selectedEffort = localStorage.getItem(storage.effort) || 'medium';
 if (!MODELS.includes(selectedModel)) selectedModel = 'gpt-5.6-luna';
@@ -33,10 +38,11 @@ let mediaRecorder = null;
 let recordingChunks = [];
 
 const save = () => {
-  localStorage.setItem(storage.chats, JSON.stringify(chats));
+  // Commit related records together: a failed write cannot leave an orphan.
+  localStorage.setItem(snapshotKey, JSON.stringify({ chats, messages, sessions }));
+
   localStorage.setItem(storage.groups, JSON.stringify(groups));
-  localStorage.setItem(storage.messages, JSON.stringify(messages));
-  localStorage.setItem(storage.sessions, JSON.stringify(sessions));
+
   localStorage.setItem('agenthub.model.sso.v1', selectedModel);
   localStorage.setItem(storage.effort, selectedEffort);
 };
@@ -121,6 +127,7 @@ function syncPills() {
 /* ---------- views ---------- */
 function showHome() {
   activeChat = null;
+  history.replaceState(null, '', location.pathname + location.search);
   $('#viewChat').hidden = true;
   const home = $('#viewHome'); home.hidden = false; home.style.display = '';
   document.body.classList.remove('chat-open');
@@ -128,6 +135,10 @@ function showHome() {
 }
 function openChat(chat) {
   activeChat = chat;
+  history.replaceState(null, '', '#chat=' + chatKey(chat));
+  selectedModel = chat.model || selectedModel;
+  selectedEffort = chat.effort || selectedEffort;
+  syncPills();
   selectedIndex = Math.max(0, chats.indexOf(chat));
   $('#viewHome').hidden = true;
   const thread = $('#viewChat'); thread.hidden = false;
@@ -147,7 +158,7 @@ function renderMessages(chat) {
   const box = $('#messageList');
   const history = historyOf(chat);
   if (!history.length) {
-    box.innerHTML = `<div class="msg-agent"><span class="who">HERMES</span>Inicia sesión para conversar con Hermes Cloud.</div>`;
+    box.textContent = 'Escribe un mensaje para comenzar.';
     return;
   }
   box.innerHTML = history.map((m) => {
@@ -155,27 +166,72 @@ function renderMessages(chat) {
     if (m.role === 'audio') return `<div class="msg-user"><div>${escapeHtml(m.text || 'Audio enviado')}</div>${m.audioUrl ? `<div class="msg-audio"><audio controls src="${m.audioUrl}"></audio></div>` : ''}</div>`;
     return `<div class="msg-user">${escapeHtml(m.text || '')}</div>`;
   }).join('');
+  if (chat.error) { const notice = document.createElement('div'); notice.setAttribute('role', 'alert'); notice.textContent = chat.error; box.appendChild(notice); }
   box.scrollTop = box.scrollHeight;
 }
-async function sendText(text) {
-  const chat = activeChat || chats[selectedIndex];
-  if (!text || !chat) return;
-  if (!window.hermesCloud.isConnected()) { showLogin('Conecta Hermes antes de enviar.'); return; }
-  if (!activeChat) openChat(chat);
-  const history = historyOf(chat);
-  history.push({ role: 'user', text }); save(); renderMessages(chat);
-  setConn(true, 'Pensando…');
-  $('#messageList').insertAdjacentHTML('beforeend', `<div class="msg-agent" id="typingRow"><span class="who">HERMES</span><span class="typing-dots"><span>●</span> <span>●</span> <span>●</span></span></div>`);
-  $('#messageList').scrollTop = $('#messageList').scrollHeight;
+function rememberDraft(input) {
+  drafts[input.id] = input.value;
+  try { localStorage.setItem(draftKey, JSON.stringify(drafts)); } catch { /* Keep visible draft. */ }
+}
+function sendError(message, input) {
+  let box = document.getElementById('sendError');
+  if (!box) { box = document.createElement('div'); box.id = 'sendError'; box.setAttribute('role', 'alert'); }
+  box.textContent = message + ' ';
+  const retry = document.createElement('button'); retry.textContent = 'Reintentar';
+  retry.onclick = () => sendText(input.value.trim(), input);
+  box.appendChild(retry); input.closest('.composer').after(box);
+}
+async function sendText(text, input = $('#messageInput')) {
+  if (!text || sending) return;
+  rememberDraft(input);
+  if (!window.hermesCloud.isConnected()) {
+    showLogin(window.hermesCloud.isRevoking() ? 'Completa la desconexión pendiente.' : 'Conecta tu sesión de Hermes para enviar. Tu borrador está guardado.');
+    return;
+  }
+  sending = true;
+  ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = true);
+  document.getElementById('sendError')?.remove();
+  const isNew = input.id === 'heroInput' || !activeChat;
+  const chat = isNew ? newConversation(text.slice(0, 42), agents[0]) : activeChat;
+  const key = chatKey(chat);
+  const previous = messages[key] || [];
+  const entry = { role: 'user', text };
+  const nextMessages = { ...messages, [key]: [...previous, entry] };
+  const nextChats = chats.includes(chat) ? chats : [chat, ...chats];
+  chat.model = selectedModel; chat.effort = selectedEffort;
+  delete chat.error;
   try {
-    const data = await window.hermesCloud.chat({ message: text, chatId: chatKey(chat), model: selectedModel, effort: selectedEffort }); const status = 200;
-    document.querySelector('#typingRow')?.remove();
-    if (status === 401) { history.push({ role: 'assistant', text: 'Necesitas iniciar sesión para continuar.' }); showLogin('Sesión caducada. Inicia sesión de nuevo.'); }
-    else if (status === 503) history.push({ role: 'assistant', text: 'Backend sin configurar todavía en Vercel.' });
-    else if (status !== 200) history.push({ role: 'assistant', text: 'Hermes no pudo responder ahora mismo.' });
-    else { if (data && data.sessionId) sessions[chatKey(chat)] = data.sessionId; history.push({ role: 'assistant', text: (data && data.text) || 'Sin respuesta.' }); }
-  } catch (error) { document.querySelector('#typingRow')?.remove(); history.push({ role: 'assistant', text: error.message || 'Sin conexión con Hermes.' }); }
-  save(); renderMessages(chat); refreshSession();
+    // One atomic local commit, before opening the remote turn.
+    localStorage.setItem(snapshotKey, JSON.stringify({chats: nextChats, messages: nextMessages, sessions}));
+  } catch {
+    sending = false;
+    ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = false);
+    sendError('No se pudo guardar la conversación. El texto sigue aquí.', input);
+    return;
+  }
+  chats = nextChats; messages = nextMessages;
+  chat.model = selectedModel; chat.effort = selectedEffort;
+  input.value = ''; rememberDraft(input); autoGrow(input);
+  openChat(chat);
+  setConn(true, 'Pensando…');
+  $('#messageList').insertAdjacentHTML('beforeend', '<div class="msg-agent" id="typingRow" role="status">Hermes está respondiendo…</div>');
+  try {
+    // Keep popup creation synchronous with the original click/Enter.
+    const data = await window.hermesCloud.chat({ message: text, chatId: key, model: chat.model, effort: chat.effort });
+    if (data?.sessionId) sessions[key] = data.sessionId;
+    messages[key].push({ role: 'assistant', text: data?.text || 'Sin respuesta.' });
+  } catch (error) {
+    // Never disguise transport/auth failures as agent replies or auto-retry an uncertain turn.
+    chat.error = error.message || 'Sin conexión con Hermes.';
+    showToast(chat.error);
+  } finally {
+    try { localStorage.setItem(snapshotKey, JSON.stringify({chats, messages, sessions})); }
+    catch { showToast('No se pudo guardar la última respuesta. No recargues todavía.'); }
+    sending = false;
+    ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = false);
+    if (activeChat === chat) renderMessages(chat);
+    renderLists($('#searchInput').value); refreshSession();
+  }
 }
 
 /* ---------- audio ---------- */
@@ -256,9 +312,11 @@ function toggleMenu(menu, anchor) {
   if (r.bottom > window.innerHeight - 220) m.style.top = `${Math.max(8, r.top - m.offsetHeight - 8)}px`;
   m.hidden = false;
 }
+function newConversation(title, agentName) {
+  return { id: crypto.randomUUID(), title, desc: 'Conversación con Hermes Cloud', time: 'Ahora', agent: agentName, agents: [agentName[0]], model: selectedModel, effort: selectedEffort, status: 'Nuevo' };
+}
 function createChat(agentName) {
-  const chat = { title: `Chat con ${agentName.split(' · ')[0]}`, desc: 'Conversación con Hermes Cloud', time: 'Ahora', agents: [agentName[0]], status: 'Nuevo' };
-  chats.unshift(chat); selectedIndex = 0; save(); openChat(chat); showToast('Chat creado');
+  openChat(newConversation(`Chat con ${agentName.split(' · ')[0]}`, agentName));
 }
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 200)}px`; }
 
@@ -277,13 +335,17 @@ $('#scrim').addEventListener('click', () => document.body.classList.remove('side
 $('#closeDialog').addEventListener('click', closeDialog);
 $('#simpleDialog').addEventListener('click', (e) => { if (e.target.id === 'simpleDialog') closeDialog(); });
 
-const submitHero = () => { const v = $('#heroInput').value.trim(); if (!v) return; $('#heroInput').value = ''; autoGrow($('#heroInput')); const chat = { title: v.slice(0, 42) || 'Nuevo chat', desc: 'Conversación con Hermes Cloud', time: 'Ahora', agents: ['D'], status: 'Nuevo' }; chats.unshift(chat); selectedIndex = 0; save(); openChat(chat); sendText(v); };
+const submitHero = () => sendText($('#heroInput').value.trim(), $('#heroInput'));
 $('#heroSendBtn').addEventListener('click', submitHero);
-$('#sendBtn').addEventListener('click', () => { const v = $('#messageInput').value.trim(); if (!v) return; $('#messageInput').value = ''; autoGrow($('#messageInput')); sendText(v); });
+$('#sendBtn').addEventListener('click', () => sendText($('#messageInput').value.trim(), $('#messageInput')));
 [$('#heroInput'), $('#messageInput')].forEach((t) => {
-  t.addEventListener('input', () => autoGrow(t));
+  t.value = drafts[t.id] || '';
+  t.addEventListener('input', () => { autoGrow(t); rememberDraft(t); });
   t.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isMobile()) { e.preventDefault(); (t.id === 'heroInput' ? submitHero : $('#sendBtn')).click(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
+      e.preventDefault();
+      if (t.id === 'heroInput') submitHero(); else $('#sendBtn').click();
+    }
   });
 });
 $('#heroMicBtn').addEventListener('click', (e) => toggleRecording(e.currentTarget));
@@ -314,5 +376,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 ['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = true; $(id).title = 'Audio y voz pendientes de conexión'; });
-syncPills(); renderLists(); renderHome(); showHome(); refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-3').catch(() => {}));
+const restoredChat = chats.find(c => '#chat=' + c.id === location.hash);
+syncPills(); renderLists(); renderHome();
+if (restoredChat) openChat(restoredChat); else showHome();
+refreshSession();
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-4').catch(() => {}));

@@ -1,5 +1,5 @@
-const CACHE = 'agenthub-shell-v7';
-const ASSETS = ['./', './index.html', './styles.css?v=20260904-9', './app.js?v=20260905-3', './cloud-connection.js?v=20260905-3', './manifest.webmanifest'];
+const CACHE = 'agenthub-shell-v8';
+const ASSETS = ['./', './index.html', './styles.css?v=20260905-4', './app.js?v=20260905-4', './cloud-connection.js?v=20260905-4', './manifest.webmanifest'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
