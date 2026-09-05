@@ -652,7 +652,7 @@ def group_catalog(request: Request) -> JSONResponse:
     _principal(request)
     def item(profile):
         return {"id": profile, "label": _GROUP_LABELS[profile], "available": _group_profile_available(profile)}
-    return _private_json({"director": item("limpatexdev-cloud"),
+    return _private_json({"mode": "analysis-only", "director": item("limpatexdev-cloud"),
                           "specialists": [item(p) for p in sorted(_GROUP_SPECIALISTS)]})
 
 
@@ -676,6 +676,20 @@ def _update_group_run(owner, run_id, *, steps=None, state=None, text="", error="
                                (state, text, error, owner, run_id, _GROUP_BOOT_ID))
 
 
+def _group_worker_env(profile: str) -> dict[str, str]:
+    # Never copy the dashboard environment: it can hold unrelated service keys.
+    # Hermes resolves the selected profile's credentials canonically on import.
+    if profile not in _GROUP_LABELS:
+        raise RuntimeError("Unknown group profile")
+    return {
+        "HOME": str(_group_profiles_root().parent),
+        "PATH": str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+        "LANG": "C.UTF-8",
+        "HERMES_HOME": str(_group_profiles_root() / profile),
+        "PYTHONPATH": "/opt/hermes",
+    }
+
+
 async def _invoke_group_profile(profile: str, prompt: str) -> str:
     if not _group_profile_available(profile):
         raise RuntimeError("Profile unavailable")
@@ -683,9 +697,7 @@ async def _invoke_group_profile(profile: str, prompt: str) -> str:
     # dashboard process. stdout/stderr are never treated as an agent response.
     with tempfile.TemporaryDirectory(prefix="agenthub-group-") as directory:
         result_path = Path(directory) / "result.json"
-        env = dict(os.environ)
-        env["HERMES_HOME"] = str(_group_profiles_root() / profile)
-        env["AGENTHUB_GROUP_PROFILE"] = profile
+        env = _group_worker_env(profile)
         process = await asyncio.create_subprocess_exec(
             sys.executable, str(Path(__file__).with_name("group_worker.py")), str(result_path),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,

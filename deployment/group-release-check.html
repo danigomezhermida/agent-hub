@@ -1,0 +1,49 @@
+<!doctype html><html lang="es"><meta charset="utf-8"><title>Validación real de grupos</title><pre id="out">Verificando grupos con sesión real…
+</pre><script src="dist/storage-transport.js?v=2.5.0"></script><script>
+(async()=>{
+ const out=document.getElementById('out'), log=s=>out.textContent+=s+'\n';
+ const GROUP='release_groups_validation_v250', RUN='release_groups_validation_v250';
+ const call=(op,args)=>window.AgentHubStorage.request(op,args);
+ try{
+  if((await call('identity')).scope!=='personal')throw Error('Identidad');
+  log('PASS propietario autenticado');
+  const catalog=await call('getGroupCatalog');
+  const expected=['limpatexdevsenior','limpatexqa'];
+  if(!catalog.director.available||expected.some(id=>!catalog.specialists.some(p=>p.id===id&&p.available)))throw Error('Perfiles no disponibles');
+  log('PASS catálogo real: director, Senior Dev y QA disponibles');
+  let run;
+  try{run=await call('getGroupRun',{runId:RUN});}catch(error){
+   // Distinguish confirmed absence from an uncertain response before starting.
+   const r=await fetch('/api/plugins/agent-hub/group-runs/'+RUN,{credentials:'same-origin',cache:'no-store'});
+   if(r.status!==404)throw Error('No se puede confirmar ausencia del run; no reenviar');
+   let config=await call('getGroups');
+   if(!config.groups.some(g=>g.id===GROUP)){
+    await call('putGroups',{expectedRevision:config.revision,groups:config.groups.concat([{id:GROUP,name:'Validación técnica de grupos',director:'limpatexdev-cloud',members:expected,objective:'Comprobar la coordinación real de desarrollo y QA sin herramientas ni acciones externas.'}])});
+    config=await call('getGroups');
+    if(!config.groups.some(g=>g.id===GROUP))throw Error('Grupo no confirmado tras escritura');
+   }
+   log('PASS configuración persistida y leída de nuevo');
+   run=await call('startGroupRun',{groupId:GROUP,runId:RUN,expectedRevision:config.revision,message:'Propón tres comprobaciones para publicar un formulario interno. No uses datos externos ni afirmes haber realizado pruebas. Incluye GRUPOS_PRODUCCION_OK en tu respuesta final.'});
+   log('PASS consulta aceptada una sola vez');
+  }
+  const deadline=Date.now()+650000;let seen='';
+  while(run.state==='running'&&Date.now()<deadline){
+   const stages=run.steps.map(s=>s.stage+':'+s.profile+':'+s.status).join(' | ');
+   if(stages!==seen){log(stages);seen=stages;}
+   await new Promise(r=>setTimeout(r,2000));run=await call('getGroupRun',{runId:RUN});
+  }
+  if(run.state!=='completed'||run.steps.length!==4||run.steps.some(s=>s.status!=='completed')||!run.text.includes('GRUPOS_PRODUCCION_OK'))throw Error('Run no confirmado: '+run.state);
+  log('PASS director → Senior Dev → QA → revisión final, proveedores reales');
+  const history=await call('getGroupRuns',{groupId:GROUP});
+  if(!history.runs.some(r=>r.id===RUN&&r.text===run.text&&r.state==='completed'))throw Error('Historial no confirmado');
+  log('PASS respuesta duradera recuperada por lectura independiente');
+  const current=await call('getGroups');
+  if(current.groups.some(g=>g.id===GROUP)){
+   await call('putGroups',{expectedRevision:current.revision,groups:current.groups.filter(g=>g.id!==GROUP)});
+   if((await call('getGroups')).groups.some(g=>g.id===GROUP))throw Error('Limpieza no confirmada');
+  }
+  log('PASS grupo temporal retirado; registros de ejecución conservados');
+  log('FINAL PASS grupo real autenticado. No certifica prueba física móvil ni UI completa.');
+ }catch(error){log('BLOCK '+error.message+'; no hay reenvío automático.');}
+})();
+</script></html>

@@ -86,6 +86,18 @@ def test_provider_failure_is_not_a_final_answer(tmp_path,monkeypatch):
         assert run['steps'][0]['status']=='failed'
 
 
+def test_worker_environment_does_not_inherit_secrets(tmp_path, monkeypatch):
+    with make_client(tmp_path/'env') as client:
+        api=api_for(client)
+        monkeypatch.setenv('AGENTHUB_AUDIT_UNRELATED_SECRET','sentinel-not-for-worker')
+        monkeypatch.setenv('OPENAI_API_KEY','other-profile-placeholder')
+        monkeypatch.setenv('HERMES_DASHBOARD_OAUTH_CLIENT_SECRET','dashboard-placeholder')
+        env=api._group_worker_env('limpatexqa')
+        assert not any(name in env for name in ['AGENTHUB_AUDIT_UNRELATED_SECRET','OPENAI_API_KEY','HERMES_DASHBOARD_OAUTH_CLIENT_SECRET'])
+        assert env['HERMES_HOME'].endswith('/profiles/limpatexqa')
+        assert set(env) == {'HOME','PATH','LANG','HERMES_HOME','PYTHONPATH'}
+
+
 def test_real_group_orchestration_contract(tmp_path, monkeypatch):
     with make_client(tmp_path / 'runs') as client:
         api = api_for(client)
@@ -109,5 +121,8 @@ def test_real_group_orchestration_contract(tmp_path, monkeypatch):
         assert 'Aportación limpatexqa' in calls[-1][1]
         assert client.post(BASE+'/groups/development/runs',json=payload,headers=auth_headers(write=True)).json() == run
         assert len(calls)==4
+        assert client.get(BASE+'/group-runs?groupId=development',headers=auth_headers()).json()=={'runs':[run]}
+        assert client.get(BASE+'/group-runs?groupId=development',headers=auth_headers('owner-b')).status_code==403
+        assert client.get(BASE+'/group-runs?groupId=unknown',headers=auth_headers()).json()=={'runs':[]}
         changed=dict(payload,message='Otra petición')
         assert client.post(BASE+'/groups/development/runs',json=changed,headers=auth_headers(write=True)).status_code==409

@@ -52,7 +52,9 @@ excepciones, rutas, credenciales, hashes de identidad ni aportaciones internas.
   100 por subproceso, 80 de presupuesto interno, una iteración, respuesta ≤16000
   caracteres por etapa. Consulta ≤12000 caracteres; body ≤32 KiB.
 - `group_worker.py` es un proceso aislado con `HERMES_HOME` fijado antes de importar
-  Hermes. Usa resolución canónica de credenciales y AIAgent, no interpreta stdout CLI.
+  Hermes. Su entorno contiene solo HOME, PATH, LANG, HERMES_HOME y PYTHONPATH:
+  no hereda claves de otros perfiles ni secretos del dashboard. Usa resolución
+  canónica de credenciales y AIAgent, no interpreta stdout CLI.
 - `enabled_toolsets=[]`, asserts de tools y valid_tool_names vacíos, sin memoria,
   contexto de ficheros, sesión persistida, revisión de fondo ni fallback de modelo.
   Permite solo chat_completions/anthropic_messages/codex_responses. ACP y runtimes
