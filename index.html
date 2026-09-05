@@ -108,6 +108,7 @@
   </div>
 
   <div class="menu-pop" id="modelMenu" hidden>
+    <button data-model="default">Modelo de Hermes <small>Configuración del perfil</small></button>
     <button data-model="gpt-5.6-luna">gpt-5.6-luna <small>Recomendado</small></button>
     <button data-model="claude-opus">claude-opus <small>Razonamiento</small></button>
     <button data-model="gpt-4.1-mini">gpt-4.1-mini <small>Rápido</small></button>
@@ -121,11 +122,11 @@
   <div class="login-overlay" id="loginOverlay" aria-hidden="true">
     <div class="login-card">
       <div class="login-mark" aria-hidden="true">A</div>
-      <h2>Iniciar sesión</h2>
-      <p>Acceso privado de Dani. La contraseña vive como variable privada en Vercel.</p>
+      <h2>Conectar con Hermes</h2>
+      <p>Usa tu sesión de Hermes Cloud. Sin API key. Autoriza la ventana de conexión y mantenla abierta mientras conversas.</p>
       <form id="loginForm">
-        <input id="loginPassword" type="password" placeholder="Contraseña" autocomplete="current-password" aria-label="Contraseña" />
-        <button>Iniciar sesión</button>
+        <p>Perfil conectado: limpatexdev-cloud.</p>
+        <button>Conectar Hermes Cloud</button>
       </form>
       <p class="login-status" id="loginStatus" role="status"></p>
     </div>
@@ -140,6 +141,7 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="app.js?v=20260904-9"></script>
+  <script src="cloud-connection.js?v=20260905-1"></script>
+  <script src="app.js?v=20260905-1"></script>
 </body>
 </html>

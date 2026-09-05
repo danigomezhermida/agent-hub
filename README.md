@@ -1,52 +1,49 @@
 # Agent Hub · Limpatex
 
-Interfaz independiente, chat-first y simplificada para conversar con perfiles y grupos de agentes desde ordenador o móvil.
+Interfaz de chat en https://agent-hub-theta-five.vercel.app.
 
-## Acceso
+## Conexión de texto actual: Hermes SSO
 
-Producción: <https://agent-hub-theta-five.vercel.app>
+1. Abrir Agent Hub y pulsar **Conectar Hermes Cloud**.
+2. En la ventana de Hermes, iniciar sesión con Nous si se solicita.
+3. Pulsar **Conectar Agent Hub** y volver a la app, dejando esa ventana abierta.
 
-La app puede instalarse desde el navegador móvil mediante “Añadir a pantalla de inicio”. Usa HTTPS y una PWA básica para cargar el shell incluso con conectividad intermitente.
+El navegador de Hermes obtiene un ticket WebSocket de un solo uso mediante su sesión autenticada y habla con `/api/ws`. El origen Vercel solo intercambia mensajes y respuestas con la ventana mediante `postMessage`. No recibe cookies, tickets ni claves. No se necesita `HERMES_CLOUD_API_KEY` para este modo.
 
-## Estado actual
+La ventana solo permite el origen de producción indicado en el código, comprueba `event.source`, canal y correlación, exige consentimiento en cada apertura y únicamente acepta el verbo chat. No permite RPC arbitrario ni elegir IDs de sesiones ajenas. Las sesiones se crean bajo `limpatexdev-cloud` y su correspondencia se guarda en el origen Hermes.
 
-- Login propio con cookie segura `HttpOnly` + `Secure` (`/api/login`, `/api/me`, `/api/logout`).
-- `GET /api/health` comprueba configuración, sesión y disponibilidad de Hermes.
-- `POST /api/chat` crea/reutiliza sesión y envía mensajes con modelo y esfuerzo.
-- `POST /api/audio` recibe audio grabado, lo transcribe y lo envía a Hermes.
-- `GET /api/voice` reserva el canal separado de voz en vivo.
-- El frontend usa el backend real; ya no hay respuestas demo.
-- Selector de modelo y esfuerzo dentro de cada conversación.
-- El backend permanece **cerrado por defecto** hasta configurar autenticación propia.
+## Componentes
 
-El almacenamiento local sigue siendo temporal: todavía no sustituye una cuenta ni una base de datos compartida.
+- `cloud-connection.js`: cliente Vercel, conexión y solicitudes correlacionadas.
+- `app.js`, `index.html`: interfaz y login SSO. Chats con UUID para evitar colisiones por título.
+- `hermes-plugin/`: copia versionada del plugin UI instalado en Hermes.
+- `sw.js`: caché de la interfaz; excluye las API y otros orígenes.
+- `api/`: backend anterior, conservado por compatibilidad; el chat SSO no lo utiliza.
 
-## Desarrollo local en Windows
+## Límites explícitos
 
-Desde CMD:
+- Mantener la ventana de Hermes abierta; al cerrarla hay que reconectar.
+- La suspensión de pestañas en móviles puede interrumpir la conexión; requiere prueba en un móvil real.
+- Listas locales: no hay sincronización multidispositivo del listado de Agent Hub.
+- Solo el perfil `limpatexdev-cloud` está conectado; los otros agentes/grupos siguen siendo prototipos.
+- Modelo y esfuerzo se envían al crear una sesión nueva; para cambiarlos, abrir un chat nuevo. `Modelo de Hermes` utiliza la configuración real del perfil.
+- Audio/transcripción y voz en vivo no forman parte de esta conexión; necesitan otra implementación/configuración.
+- No se autorizan automáticamente acciones sensibles: si un turno pide aprobación, atenderlo en Hermes.
 
-```bat
-cd C:\ruta\a\agent-hub
-python -m http.server 4173
+## Instalación del plugin
+
+Copiar `hermes-plugin/` a `plugins/agent-hub/` del home del dashboard y del perfil abierto si difieren. Habilitar exclusivamente `agent-hub` mediante `hermes -p <perfil> plugins enable agent-hub`, sin conceder reemplazo de herramientas. Con sesión autenticada, abrir `/api/dashboard/plugins/rescan`. No hace falta reiniciar: este plugin solo sirve archivos de interfaz y no monta rutas backend ni registra proveedores token.
+
+## Verificación
+
+```sh
+node --test tests/cloud-connection.test.js
+node --check app.js
+node --check cloud-connection.js
+node --check sw.js
+git diff --check
 ```
 
-Abrir: <http://127.0.0.1:4173/>
+La prueba del navegador debe enviar un mensaje desde Agent Hub, recibir una respuesta real, enviar otro turno de memoria y reconectar conservando la sesión. No confundir pruebas con mocks con conexión de producción.
 
-## Backend Hermes Cloud
-
-La capa `api/` usa estas variables exclusivamente en el servidor de Vercel:
-
-- `HERMES_CLOUD_URL`: URL base del gateway Hermes Cloud.
-- `HERMES_CLOUD_API_KEY`: clave Bearer del API server de Hermes. Nunca se coloca en `app.js`.
-- `AGENT_HUB_PASSWORD`: contraseña privada de acceso a Agent Hub.
-- `AGENT_HUB_SESSION_SECRET`: secreto de firma de cookies, mínimo 32 caracteres.
-- `OPENAI_API_KEY`: necesaria solo para transcribir audio en `/api/audio`.
-- `AGENT_HUB_ACCESS_TOKEN`: opcional, reserva para automatismos; el acceso normal usa cookie.
-
-No debes enviarme ni pegar aquí ninguno de esos valores. Se configurarían directamente como variables privadas en Vercel cuando decidas activar el acceso.
-
-Hasta que configures esas variables, los endpoints devuelven `503 backend_not_configured` o `401 unauthorized`, por diseño.
-
-## Próxima fase: sincronización y voz en vivo
-
-El audio grabado ya entra por `/api/audio`. La voz en vivo usará un canal separado (`/api/voice` como reserva + servidor realtime dedicado con WebRTC/WebSocket), sin mezclarlo con el endpoint de mensajes.
+Despliegue: GitHub `main` activa Vercel. No hacer push sin autorización. Los secretos nunca van en el repositorio ni en el frontend.

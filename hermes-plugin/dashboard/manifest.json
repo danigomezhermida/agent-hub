@@ -1,0 +1,9 @@
+{
+  "name": "agent-hub",
+  "label": "Agent Hub",
+  "icon": "Bot",
+  "version": "2.0.0",
+  "description": "Conector de navegador con login Hermes; sin claves compartidas.",
+  "tab": { "path": "/agent-hub", "position": "after:skills" },
+  "entry": "dist/agent-hub.js"
+}

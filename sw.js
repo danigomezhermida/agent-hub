@@ -1,21 +1,18 @@
-const CACHE = 'agenthub-shell-v4';
-const ASSETS = ['./', './index.html', './styles.css?v=20260904-9', './app.js?v=20260904-9', './manifest.webmanifest'];
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
+const CACHE = 'agenthub-shell-v5';
+const ASSETS = ['./', './index.html', './styles.css?v=20260904-9', './app.js?v=20260905-1', './cloud-connection.js?v=20260905-1', './manifest.webmanifest'];
+self.addEventListener('install', event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(
-    keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))
-  )).then(() => self.clients.claim()));
+self.addEventListener('activate', event => {
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('agenthub-shell-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim()));
 });
-
-self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  event.respondWith(fetch(event.request).then((response) => {
-    const copy = response.clone();
-    caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+self.addEventListener('fetch', event => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  const shell = ASSETS.some(asset => new URL(asset, self.location.href).href === url.href);
+  if (!shell && event.request.mode !== 'navigate') return;
+  event.respondWith(fetch(event.request).then(response => {
+    if (response.ok && response.type === 'basic') { const copy = response.clone(); event.waitUntil(caches.open(CACHE).then(cache => cache.put(event.request, copy))); }
     return response;
-  }).catch(() => caches.match(event.request).then((cached) => cached || caches.match('./index.html'))));
+  }).catch(async () => (await caches.match(event.request)) || (event.request.mode === 'navigate' ? caches.match('./index.html') : Response.error())));
 });

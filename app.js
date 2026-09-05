@@ -10,9 +10,9 @@ const seedGroups = [
   { name: 'Equipo de calidad', desc: '2 agentes', agents: ['Q', 'S'] }
 ];
 const agents = ['Dani · Director', 'Senior Dev', 'QA Limpatex', 'Operaciones'];
-const MODELS = ['gpt-5.6-luna', 'claude-opus', 'gpt-4.1-mini'];
+const MODELS = ['default', 'gpt-5.6-luna', 'claude-opus', 'gpt-4.1-mini'];
 const EFFORTS = ['low', 'medium', 'high'];
-const MODEL_LABEL = { 'gpt-5.6-luna': 'gpt-5.6-luna', 'claude-opus': 'claude-opus', 'gpt-4.1-mini': 'gpt-4.1-mini' };
+const MODEL_LABEL = { 'default': 'Modelo de Hermes', 'gpt-5.6-luna': 'gpt-5.6-luna', 'claude-opus': 'claude-opus', 'gpt-4.1-mini': 'gpt-4.1-mini' };
 const storage = { chats: 'agenthub.chats.v1', groups: 'agenthub.groups.v1', messages: 'agenthub.messages.v2', model: 'agenthub.model.v1', effort: 'agenthub.effort.v1', sessions: 'agenthub.sessions.v1' };
 const read = (key, fallback) => { try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) ?? fallback) : fallback; } catch { return fallback; } };
 const $ = (id) => document.querySelector(id);
@@ -23,7 +23,7 @@ let chats = read(storage.chats, seedChats);
 let groups = read(storage.groups, seedGroups);
 let messages = read(storage.messages, {});
 let sessions = read(storage.sessions, {});
-let selectedModel = localStorage.getItem(storage.model) || 'gpt-5.6-luna';
+let selectedModel = localStorage.getItem('agenthub.model.sso.v1') || 'default';
 let selectedEffort = localStorage.getItem(storage.effort) || 'medium';
 if (!MODELS.includes(selectedModel)) selectedModel = 'gpt-5.6-luna';
 if (!EFFORTS.includes(selectedEffort)) selectedEffort = 'medium';
@@ -37,10 +37,12 @@ const save = () => {
   localStorage.setItem(storage.groups, JSON.stringify(groups));
   localStorage.setItem(storage.messages, JSON.stringify(messages));
   localStorage.setItem(storage.sessions, JSON.stringify(sessions));
-  localStorage.setItem(storage.model, selectedModel);
+  localStorage.setItem('agenthub.model.sso.v1', selectedModel);
   localStorage.setItem(storage.effort, selectedEffort);
 };
-const chatKey = (c) => c.title;
+chats.forEach(c => { if (!c.id) { c.id = crypto.randomUUID(); if (messages[c.title]) messages[c.id] = [...messages[c.title]]; } });
+save();
+const chatKey = (c) => { if (!c.id) c.id = crypto.randomUUID(); return c.id; };
 const historyOf = (c) => { const k = chatKey(c); if (!messages[k]) messages[k] = []; return messages[k]; };
 const sessionOf = (c) => sessions[chatKey(c)] || '';
 
@@ -54,22 +56,13 @@ function showToast(msg) { const t = $('#toast'); t.textContent = msg; t.classLis
 
 /* ---------- session / connection ---------- */
 async function refreshSession() {
-  try {
-    const { status, data } = await api('/api/me');
-    if (status === 200 && data && data.authenticated) {
-      $('#loginOverlay').classList.remove('open');
-      setConn(true, data.hermes === 'configured' ? 'Hermes listo' : 'Sesión iniciada');
-      try {
-        const h = await api('/api/health');
-        if (h.status === 200) setConn(true, 'Hermes listo');
-        else setConn(true, h.data && h.data.status === 'not_ready' ? 'Backend sin configurar' : 'Sesión iniciada');
-      } catch { /* keep */ }
-      return true;
-    }
-    if (data && data.loginConfigured === false) { setConn(false, 'Backend sin configurar'); showLogin('Backend sin configurar: faltan variables privadas en Vercel.'); return false; }
-    setConn(false, 'Requiere login'); showLogin(''); return false;
-  } catch { setConn(false, 'Sin conexión'); return false; }
+  if (window.hermesCloud.isConnected()) {
+    $('#loginOverlay').classList.remove('open'); setConn(true, 'Hermes conectado'); return true;
+  }
+  setConn(false, 'Conectar Hermes'); showLogin('Usa tu sesión de Hermes. No necesitas API key ni contraseña de Vercel.'); return false;
 }
+window.addEventListener('hermes-connection', refreshSession);
+window.addEventListener('hermes-attention', () => showToast('Hermes necesita tu intervención en su dashboard.'));
 function setConn(ok, text) {
   const dot = $('#connDot'); if (dot) dot.className = 'conn-dot' + (ok ? ' ok' : text === 'Comprobando…' ? '' : ' bad');
   const el = $('#connText'); if (el) el.textContent = text;
@@ -164,6 +157,7 @@ function renderMessages(chat) {
 async function sendText(text) {
   const chat = activeChat || chats[selectedIndex];
   if (!text || !chat) return;
+  if (!window.hermesCloud.isConnected()) { showLogin('Conecta Hermes antes de enviar.'); return; }
   if (!activeChat) openChat(chat);
   const history = historyOf(chat);
   history.push({ role: 'user', text }); save(); renderMessages(chat);
@@ -171,13 +165,13 @@ async function sendText(text) {
   $('#messageList').insertAdjacentHTML('beforeend', `<div class="msg-agent" id="typingRow"><span class="who">HERMES</span><span class="typing-dots"><span>●</span> <span>●</span> <span>●</span></span></div>`);
   $('#messageList').scrollTop = $('#messageList').scrollHeight;
   try {
-    const { status, data } = await api('/api/chat', { method: 'POST', body: JSON.stringify({ message: text, sessionId: sessionOf(chat), model: selectedModel, effort: selectedEffort }) });
+    const data = await window.hermesCloud.chat({ message: text, chatId: chatKey(chat), model: selectedModel, effort: selectedEffort }); const status = 200;
     document.querySelector('#typingRow')?.remove();
     if (status === 401) { history.push({ role: 'assistant', text: 'Necesitas iniciar sesión para continuar.' }); showLogin('Sesión caducada. Inicia sesión de nuevo.'); }
     else if (status === 503) history.push({ role: 'assistant', text: 'Backend sin configurar todavía en Vercel.' });
     else if (status !== 200) history.push({ role: 'assistant', text: 'Hermes no pudo responder ahora mismo.' });
     else { if (data && data.sessionId) sessions[chatKey(chat)] = data.sessionId; history.push({ role: 'assistant', text: (data && data.text) || 'Sin respuesta.' }); }
-  } catch { document.querySelector('#typingRow')?.remove(); history.push({ role: 'assistant', text: 'Sin conexión con el backend.' }); }
+  } catch (error) { document.querySelector('#typingRow')?.remove(); history.push({ role: 'assistant', text: error.message || 'Sin conexión con Hermes.' }); }
   save(); renderMessages(chat); refreshSession();
 }
 
@@ -301,22 +295,17 @@ document.addEventListener('click', () => { $('#modelMenu').hidden = true; $('#ef
 document.querySelectorAll('#modelMenu button').forEach((b) => b.addEventListener('click', () => { selectedModel = b.dataset.model; save(); syncPills(); renderHome(); showToast(`Modelo: ${selectedModel}`); }));
 document.querySelectorAll('#effortMenu button').forEach((b) => b.addEventListener('click', () => { selectedEffort = b.dataset.effort; save(); syncPills(); renderHome(); showToast(`Esfuerzo: ${selectedEffort}`); }));
 
-$('#loginForm').addEventListener('submit', async (e) => {
+$('#loginForm').addEventListener('submit', e => {
   e.preventDefault();
-  const password = $('#loginPassword').value;
-  $('#loginStatus').textContent = 'Comprobando…';
-  try {
-    const { status } = await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
-    if (status === 200) { $('#loginPassword').value = ''; $('#loginStatus').textContent = ''; await refreshSession(); showToast('Sesión iniciada'); }
-    else if (status === 503) $('#loginStatus').textContent = 'Backend sin configurar en Vercel.';
-    else $('#loginStatus').textContent = 'Contraseña incorrecta.';
-  } catch { $('#loginStatus').textContent = 'Sin conexión con el backend.'; }
+  try { window.hermesCloud.open(); $('#loginStatus').textContent = 'Pulsa Conectar en la ventana de Hermes y vuelve aquí.'; }
+  catch (error) { $('#loginStatus').textContent = error.message; }
 });
-$('#logoutBtn').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch {} showLogin('Sesión cerrada.'); setConn(false, 'Requiere login'); });
+$('#logoutBtn').addEventListener('click', () => window.hermesCloud.disconnect());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeDialog(); if (activeChat) closeChat(); document.body.classList.remove('side-open'); }
   if ((e.key.toLowerCase() === 'n' || e.key.toLowerCase() === 'k') && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) startNewChat();
 });
 
+['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = true; $(id).title = 'Audio y voz pendientes de conexión'; });
 syncPills(); renderLists(); renderHome(); showHome(); refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260904-9').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-1').catch(() => {}));
