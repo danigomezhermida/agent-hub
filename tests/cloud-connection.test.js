@@ -208,9 +208,15 @@ test('mocked backend: websocket closure rejects an outstanding ledger-claimed tu
   for(let i=0;i<20&&!ws.sent.some(frame=>frame.method==='session.create');i++)await flush();
   const create = ws.sent.find(frame => frame.method === 'session.create'); assert.ok(create);
   ws.frame({ jsonrpc: '2.0', id: create.id, result: { session_id: 'live_1', stored_session_id: 'stored_1' } });
-  for(let i=0;i<20&&!ws.sent.some(frame=>frame.method==='prompt.submit');i++)await flush();
-  assert.ok(ws.sent.some(frame => frame.method === 'prompt.submit'));
+  // WebCrypto digest runs off-thread; count-based setImmediate loops can race
+  // it under parallel test load. Wait on the actual submit signal, bounded.
+  const submitDeadline = Date.now() + 2000;
+  while (!ws.sent.some(frame=>frame.method==='prompt.submit') && Date.now()<submitDeadline) {
+    await new Promise(resolve=>setTimeout(resolve,2));
+  }
+  const submitted=ws.sent.some(frame=>frame.method==='prompt.submit');
   ws.readyState = 3; ws.onclose(); await flush(); await flush();
+  assert.ok(submitted);
   const result = h.posts.find(item => item.data.type === 'result' && item.data.requestId === 'req_1');
   assert.equal(result.data.ok, false);
   assert.match(result.data.error, /WebSocket|conexión/i);

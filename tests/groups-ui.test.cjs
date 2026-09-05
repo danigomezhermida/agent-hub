@@ -52,6 +52,25 @@ function harness({ groups = [group], cat = catalog, stored = {}, owner = 'person
 
 async function loaded(h) { await h.ui.loadFromGesture(); }
 
+test('old completion after revoke cannot close or unlock a new group lease', async () => {
+  const h=harness(); let resolveOld,resolveNew;
+  const oldGate=new Promise(resolve=>{resolveOld=resolve;});
+  const newGate=new Promise(resolve=>{resolveNew=resolve;});
+  const old=h.ui._withGesture(async fence=>{await oldGate;fence();});
+  old.catch(()=>{}); await h.flush();
+  h.ui.revoke();
+  const newer=h.ui._withGesture(async fence=>{await newGate;fence();});
+  newer.catch(()=>{}); await h.flush();
+  const closes=h.closes(); resolveOld();
+  await assert.rejects(old,/identidad/i);
+  assert.equal(h.closes(),closes);
+  assert.equal(h.ui.operationBusy,true);
+  resolveNew();await newer;
+  assert.equal(h.ui.operationBusy,false);
+  assert.equal(h.closes(),closes+1);
+  h.dom.window.close();
+});
+
 test('catalog is authoritative: missing director/member is visible and cannot run', async () => {
   const missingDirector = harness({ cat: { director: null, specialists: catalog.specialists } });
   await assert.rejects(missingDirector.ui.loadFromGesture(), /director/i);
@@ -128,8 +147,8 @@ test('reload never resubmits a persisted run; recovery is an explicit run-list G
 
 test('explicit status refresh discovers the latest run created on another device', async () => {
   const h = harness({ handlers: { getGroupRuns: () => ({ runs: [
-    { id: 'run_old', groupId: group.id, state: 'completed', steps: [], text: 'Anterior', error: '' },
-    { id: 'run_other_device', groupId: group.id, state: 'completed', steps: [], text: 'Última de otro dispositivo', error: '' }
+    { id: 'run_other_device', groupId: group.id, state: 'completed', steps: [], text: 'Última de otro dispositivo', error: '' },
+    { id: 'run_old', groupId: group.id, state: 'completed', steps: [], text: 'Anterior', error: '' }
   ] }) } });
   await loaded(h); h.ui.open(group.id);
   assert.equal(h.$('#refreshGroupRunBtn').hidden, false);
@@ -138,6 +157,16 @@ test('explicit status refresh discovers the latest run created on another device
   assert.match(h.w.localStorage.getItem('agenthub.group-runs.v1'), /run_other_device/);
   assert.equal(h.calls.some(call => call.op === 'startGroupRun'), false);
   h.dom.window.close();
+});
+
+test('old locally cached terminal run does not hide a newer server result', async () => {
+  const h=harness({stored:{'agenthub.group-runs.v1':JSON.stringify({[group.id]:{runId:'old',state:'completed'}})},handlers:{getGroupRuns:()=>({runs:[
+    {id:'new',groupId:group.id,state:'completed',steps:[],text:'Nueva consulta',error:''},
+    {id:'old',groupId:group.id,state:'completed',steps:[],text:'Antigua',error:''}
+  ]})}});
+  await loaded(h);h.ui.open(group.id);await h.ui.refreshRunFromGesture();
+  assert.match(h.$('#groupRunResult').textContent,/Nueva consulta/);
+  assert.equal(h.calls.some(c=>c.op==='startGroupRun'),false);h.dom.window.close();
 });
 
 test('identity revocation during a deferred catalog reply cannot repopulate groups', async () => {

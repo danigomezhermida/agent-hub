@@ -139,6 +139,7 @@
       fence();
       return operation(fence);
     }).finally(function () {
+      if (self.generation !== generation) return;
       self._setBusy(false);
       if (!self.isVoiceBusy()) self.transport.closeVoice?.();
     });
@@ -276,6 +277,7 @@
   };
   GroupUI.prototype.revoke = function () {
     this.generation += 1;
+    this.operationBusy = false;
     this.runs = this._readRuns();
     this.groups = [];
     this.revision = null;
@@ -461,7 +463,10 @@
         var runs = validRunList(listReply, group.id);
         var run = runId && runs.find(function (candidate) { return candidate.id === runId; });
         if (!run && runId && ID.test(runId)) { var exactReply = await self.transport.storage('getGroupRun', { runId: runId }); fence(); run = validRun(exactReply, runId, group.id); }
-        if (!run) run = runs[runs.length - 1];
+        // Once the exact local request is server-confirmed terminal, show the
+        // latest consultation too; another device may have submitted since then.
+        if (run && TERMINAL_STATES.has(run.state) && runs[0]) run = runs[0];
+        if (!run) run = runs[0]; // Server contract: newest first.
         if (!run) throw new Error('Este grupo todavía no tiene ejecuciones.');
         fence();
         self._persistRun(Object.assign({ runId: run.id, message: pending?.message || '' }, run));

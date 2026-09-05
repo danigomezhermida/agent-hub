@@ -24,7 +24,7 @@ const assert = require('node:assert/strict');
       assert.match(await page.locator('#groupNotice').textContent(), /herramientas están deshabilitadas/);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       assert.deepEqual(errors, []);
-      console.log(`PASS groups ${width}px: real list/detail/run, disclosure, no overflow/errors`);
+      console.log(`PASS groups ${width}px: UI list/detail/run, disclosure, no overflow/errors. Remote simulated`);
       await context.close();
     }
   } finally { await browser.close(); }
