@@ -180,7 +180,7 @@
       pending.delete(data.requestId);
       clearTimeout(item.timer);
       if (!data.ok) {
-        const error = new Error(data.error || 'Hermes no devolvió una respuesta.'); error.code = data.code; item.reject(error);
+        const error = new Error(data.error || 'Hermes no devolvió una respuesta.'); error.code = data.code; if (Number.isInteger(data.httpStatus)) error.httpStatus = data.httpStatus; item.reject(error);
       } else if (item.kind === 'recover' && data.result?.chatId === item.chatId && ['completed','rejected','uncertain'].includes(data.result.state)) {
         item.resolve(data.result);
       } else if (item.kind === 'storage') {
@@ -254,7 +254,7 @@
     isConnected: () => authorized && !revoking,
     ownerScope: () => verifiedScope,
     storage(op, args = {}) {
-      const allowedOps = ['identity','getState','putState','getAudio','putAudio','getBindings','putBinding'];
+      const allowedOps = ['identity','getState','putState','getAudio','putAudio','getBindings','putBinding','getGroupCatalog','getGroups','putGroups','startGroupRun','getGroupRun','getGroupRuns'];
       if (!allowedOps.includes(op)) return Promise.reject(new Error('Operación no permitida.'));
       return request('storage', {op,args}, 35000);
     },

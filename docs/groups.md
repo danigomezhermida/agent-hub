@@ -6,6 +6,8 @@ prepara un plan, consulta a todos los especialistas configurados y redacta una
 respuesta final revisada. Las aportaciones intermedias no se muestran como
 respuestas del director. Se muestran etapas y estado real.
 
+La UI usa catálogo, grupos y ejecuciones reales mediante el puente autenticado. Los grupos de demostración se han retirado.
+
 Cada ejecución es una consulta independiente; no hereda conversaciones anteriores.
 No usa mocks de producción. No ejecuta herramientas, cambios de código, despliegues,
 correos, WhatsApp, scheduler ni jobs de Little Hotelier. Los grupos no añaden una
@@ -85,3 +87,11 @@ Guardar backup del plugin instalado antes de copiar. No reiniciar gateway ni job
 El frontend anterior tolera las tablas nuevas. Rollback: restaurar ficheros del plugin
 respaldados y frontend anterior sin borrar SQLite. Una ejecución interrumpida no se
 certifica completada ni se reenvía después del rollback.
+
+## Cliente y seguridad
+- Operaciones permitidas: `getGroupCatalog`, `getGroups`, `putGroups`, `startGroupRun`, `getGroupRun` y `getGroupRuns`; no existe RPC arbitrario desde el cliente.
+- El formulario usa CAS y verifica cada escritura con un `getGroups` posterior antes de mostrar éxito.
+- El `runId` se persiste antes del POST. Una recarga nunca repite el POST; la recuperación se hace solo mediante GET explícito, incluido el historial de otro dispositivo.
+- Una respuesta HTTP definitiva al inicio queda como «no enviada»; una pérdida de transporte queda incierta y bloquea nuevas ejecuciones hasta consultar.
+- Cada ejecución es una consulta independiente, sin contexto heredado. El servidor deshabilita herramientas y limita el resultado visible al texto final del director.
+- Publicación únicamente con orden explícita en la tarea de integración.

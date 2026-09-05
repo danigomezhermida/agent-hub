@@ -148,6 +148,23 @@ test('completed result detaches old popup and next turn uses a unique window', a
   assert.equal((await second).text, 'dos');
 });
 
+test('client bridge allows only the fixed group storage operations', async () => {
+  const h = clientHarness(); authorize(h);
+  const opened = h.api.openVoice(); const popup = h.popups.at(-1); h.tick();
+  receive(h, popup, { type: 'ready', connected: true, ownerScope: 'personal' }); await opened;
+  const promise = h.api.storage('startGroupRun', {groupId:'g_1',runId:'run_1',message:'Analiza',expectedRevision:0});
+  const request = [...h.sent].reverse().find(item => item.popup === popup && item.data.type === 'storage');
+  assert.equal(request.data.op, 'startGroupRun');
+  receive(h, popup, { type: 'result', requestId: request.data.requestId, ok: true, result: {id:'run_1',groupId:'g_1',state:'running',steps:[],text:'',error:''} });
+  assert.equal((await promise).id, 'run_1');
+  const rejected = h.api.storage('startGroupRun', {groupId:'g_1',runId:'run_2',message:'Otra',expectedRevision:0});
+  const rejectedRequest = [...h.sent].reverse().find(item => item.popup === popup && item.data.type === 'storage' && item.data.requestId !== request.data.requestId);
+  receive(h, popup, { type: 'result', requestId: rejectedRequest.data.requestId, ok: false, error: 'Hay cambios de otro dispositivo.', code: 'conflict', httpStatus: 409 });
+  await assert.rejects(rejected, error => error.code === 'conflict' && error.httpStatus === 409);
+  await assert.rejects(h.api.storage('arbitraryGroupRpc', {}), /no permitida/i);
+  h.api.closeVoice();
+});
+
 test('failed remote revocation remains fail-closed and cannot reconnect silently', async () => {
   const h = clientHarness(); authorize(h); h.block(true);
   await assert.rejects(h.api.disconnect(), /Desconexión pendiente/);

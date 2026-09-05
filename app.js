@@ -4,16 +4,11 @@ const seedChats = [
   { title: 'Operativa de septiembre', desc: 'Planificación y prioridades de hoy', time: 'Ayer', agents: ['O', 'D'], status: 'Listo' },
   { title: 'Ideas para SATUA', desc: 'Servicios y experiencia hospitality', time: '2 sep', agents: ['D'], status: 'Listo' }
 ];
-const seedGroups = [
-  { name: 'Dirección + Desarrollo', desc: '3 agentes', agents: ['D', 'S', 'Q'] },
-  { name: 'Limpatex Operaciones', desc: '2 agentes', agents: ['O', 'D'] },
-  { name: 'Equipo de calidad', desc: '2 agentes', agents: ['Q', 'S'] }
-];
 const agents = ['Dani · Director', 'Senior Dev', 'QA Limpatex', 'Operaciones'];
 const MODELS = ['default', 'gpt-5.6-luna', 'claude-opus', 'gpt-4.1-mini'];
 const EFFORTS = ['low', 'medium', 'high'];
 const MODEL_LABEL = { 'default': 'Modelo de Hermes', 'gpt-5.6-luna': 'gpt-5.6-luna', 'claude-opus': 'claude-opus', 'gpt-4.1-mini': 'gpt-4.1-mini' };
-const storage = { chats: 'agenthub.chats.v1', groups: 'agenthub.groups.v1', messages: 'agenthub.messages.v2', model: 'agenthub.model.v1', effort: 'agenthub.effort.v1', sessions: 'agenthub.sessions.v1' };
+const storage = { chats: 'agenthub.chats.v1', messages: 'agenthub.messages.v2', model: 'agenthub.model.v1', effort: 'agenthub.effort.v1', sessions: 'agenthub.sessions.v1' };
 const read = (key, fallback) => { try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) ?? fallback) : fallback; } catch { return fallback; } };
 const cloneJSON = value => JSON.parse(JSON.stringify(value));
 const $ = (id) => document.querySelector(id);
@@ -26,7 +21,6 @@ const snapshot = read(snapshotKey, null);
 // Preserve the exact pre-sync source. It is never removed, including on revocation.
 if (snapshot && !localStorage.getItem(legacySnapshotKey)) localStorage.setItem(legacySnapshotKey, JSON.stringify(snapshot));
 let chats = snapshot?.chats || read(storage.chats, seedChats);
-let groups = read(storage.groups, seedGroups);
 let messages = snapshot?.messages || read(storage.messages, {});
 let sessions = snapshot?.sessions || read(storage.sessions, {});
 let sending = false;
@@ -40,6 +34,7 @@ let selectedIndex = 0;
 let activeChat = null;
 let voiceUI = null;
 let cloudSync = null;
+let groupUI = null;
 let preservedLocalSnapshot = null;
 const mediaURLs = new Map();
 
@@ -48,8 +43,6 @@ const save = () => {
   // Commit related records together: a failed write cannot leave an orphan.
   localStorage.setItem(snapshotKey, JSON.stringify(currentSnapshot()));
   preservedLocalSnapshot = cloneJSON(currentSnapshot());
-
-  localStorage.setItem(storage.groups, JSON.stringify(groups));
 
   localStorage.setItem('agenthub.model.sso.v1', selectedModel);
   localStorage.setItem(storage.effort, selectedEffort);
@@ -85,6 +78,7 @@ function releaseMediaURLs() {
 function clearSyncedView() {
   if (!preservedLocalSnapshot) preservedLocalSnapshot = cloneJSON(currentSnapshot());
   releaseMediaURLs(); document.querySelectorAll('dialog[data-turn-evidence]').forEach(dialog => dialog.remove()); activeChat = null; chats = []; messages = {}; sessions = {};
+  groupUI?.revoke();
   $('#messageList').textContent = ''; renderLists(); renderHome();
   $('#viewChat').hidden = true; $('#viewHome').hidden = false; document.body.classList.remove('chat-open');
   setSyncGate();
@@ -142,15 +136,7 @@ function renderLists(filter = '') {
     b.addEventListener('click', () => openChat(chat));
     li.appendChild(b); list.appendChild(li);
   });
-  const gl = $('#groupList');
-  gl.innerHTML = '';
-  groups.forEach((g) => {
-    const li = document.createElement('li');
-    const b = document.createElement('button');
-    b.textContent = g.name;
-    b.addEventListener('click', () => openGroup(g));
-    li.appendChild(b); gl.appendChild(li);
-  });
+  groupUI?.renderList(filter);
 }
 function renderHome() {
   const hour = new Date().getHours();
@@ -162,7 +148,7 @@ function renderHome() {
     b.addEventListener('click', () => { $('#heroInput').value = `Trabajemos en: ${s}`; $('#heroInput').focus(); });
     $('#chips').appendChild(b);
   });
-  $('#fleet').innerHTML = `<span><b>${agents.length}</b> agentes</span><span><b>${groups.length}</b> grupos</span><span><b>${escapeHtml(selectedModel)}</b> · ${escapeHtml(selectedEffort)}</span>`;
+  $('#fleet').innerHTML = `<span><b>${agents.length}</b> agentes</span><span><b>${groupUI?.getGroupCount() || 0}</b> grupos reales</span><span><b>${escapeHtml(selectedModel)}</b> · ${escapeHtml(selectedEffort)}</span>`;
 }
 function syncPills() {
   ['#modelPill', '#modelPillChat'].forEach((s) => { const el = $(s); if (el) el.innerHTML = `${escapeHtml(selectedModel)} <span aria-hidden="true">⌄</span>`; });
@@ -175,6 +161,7 @@ function showHome() {
   activeChat = null;
   history.replaceState(null, '', location.pathname + location.search);
   $('#viewChat').hidden = true;
+  groupUI?.hideDetail();
   const home = $('#viewHome'); home.hidden = false; home.style.display = '';
   document.body.classList.remove('chat-open');
   renderLists($('#searchInput').value); renderHome();
@@ -188,15 +175,13 @@ function openChat(chat) {
   syncPills();
   selectedIndex = Math.max(0, chats.indexOf(chat));
   $('#viewHome').hidden = true;
+  groupUI?.hideDetail();
   const thread = $('#viewChat'); thread.hidden = false;
   document.body.classList.add('chat-open');
   $('#chatWindowTitle').textContent = chat.title;
   renderMessages(chat); renderLists($('#searchInput').value);
   document.body.classList.remove('side-open');
   if (!isMobile()) $('#messageInput').focus();
-}
-function openGroup(g) {
-  openDialog('GRUPO DE AGENTES', g.name, g.agents.map((a) => agents.find((n) => n.startsWith(a)) || a));
 }
 function closeChat() { showHome(); }
 
@@ -390,7 +375,7 @@ const startNewChat = () => openDialog('NUEVO CHAT', '¿Con quién quieres hablar
 $('#newChatBtn').addEventListener('click', startNewChat);
 $('#mobileNewChatBtn').addEventListener('click', startNewChat);
 $('#chatNewBtn').addEventListener('click', startNewChat);
-$('#newGroupBtn').addEventListener('click', () => openDialog('NUEVO GRUPO', 'Elige los agentes del grupo', agents, (a) => { groups.unshift({ name: `Grupo con ${a.split(' · ')[0]}`, desc: '1 agente', agents: [a[0]] }); save(); renderLists($('#searchInput').value); renderHome(); showToast('Grupo creado'); }));
+
 $('#backBtn').addEventListener('click', closeChat);
 $('#openSidebar').addEventListener('click', () => document.body.classList.add('side-open'));
 $('#collapseSidebar').addEventListener('click', () => document.body.classList.remove('side-open'));
@@ -426,15 +411,24 @@ document.querySelectorAll('#effortMenu button').forEach((b) => b.addEventListene
 
 $('#syncBtn').addEventListener('click', () => {
   const operation = cloudSync.syncFromUserGesture();
-  operation.then(() => { setConn(true, 'Hermes sincronizado'); setSyncGate(); }).catch(error => {
+  operation.then(async () => {
+    setConn(true, 'Hermes sincronizado'); setSyncGate();
+    try {
+      await groupUI?.loadWithinLease();
+      const groupId = location.hash.startsWith('#group=') ? location.hash.slice(7) : '';
+      if (groupId) groupUI?.open(groupId);
+    } catch { /* El estado de grupos conserva el error real del catálogo. */ }
+  }).catch(error => {
     if (error.code !== 'conflict') syncStatus({ state: 'error', message: error.message });
-  });
+  }).finally(() => { if (!voiceUI?.busy) window.hermesCloud.closeVoice?.(); });
 });
 $('#reloadRemoteBtn').addEventListener('click', () => {
   let ready;
   try { ready = window.hermesCloud.openVoice(); ready.catch(() => {}); }
   catch (error) { showToast(error.message); return; }
-  ready.then(() => cloudSync.reloadRemote()).catch(error => syncStatus({ state: 'error', message: error.message }));
+  ready.then(async () => { await cloudSync.reloadRemote(); try { await groupUI?.loadWithinLease(); } catch {} })
+    .catch(error => syncStatus({ state: 'error', message: error.message }))
+    .finally(() => { if (!voiceUI?.busy) window.hermesCloud.closeVoice?.(); });
 });
 $('#loginForm').addEventListener('submit', e => {
   e.preventDefault();
@@ -449,7 +443,7 @@ $('#logoutBtn').addEventListener('click', async () => {
 });
 document.addEventListener('keydown', (e) => {
   if (voiceUI?.busy) return;
-  if (e.key === 'Escape') { closeDialog(); if (activeChat) closeChat(); document.body.classList.remove('side-open'); }
+  if (e.key === 'Escape') { closeDialog(); groupUI?.closeEditor(); if (activeChat || !$('#viewGroup').hidden) showHome(); document.body.classList.remove('side-open'); }
   if ((e.key.toLowerCase() === 'n' || e.key.toLowerCase() === 'k') && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) startNewChat();
 });
 
@@ -462,7 +456,7 @@ cloudSync = new window.AgentCloudSync.CloudSync({
   clearVisible: clearSyncedView,
   onStatus: syncStatus
 });
-window.addEventListener('hermes-identity-denied', () => cloudSync.revoke());
+window.addEventListener('hermes-identity-denied', () => { cloudSync.revoke(); groupUI?.revoke(); });
 const turnRecoveryUI = window.AgentTurnUI?.create({
   transport: window.hermesCloud, sync: cloudSync,
   getChat: () => activeChat, getMessages: chat => messages[chat.id] || [],
@@ -512,6 +506,23 @@ if (window.AgentVoice && window.AgentVoiceUI) {
     notify: showToast, isSending: () => sending, lock: () => setSending(sending)
   });
 }
+if (window.AgentGroups?.GroupUI) {
+  groupUI = new window.AgentGroups.GroupUI({
+    window,
+    document,
+    transport: window.hermesCloud,
+    notify: showToast,
+    isVoiceBusy: () => Boolean(voiceUI?.busy),
+    onCount: () => renderHome(),
+    onOpen: group => {
+      activeChat = null;
+      $('#viewHome').hidden = true;
+      $('#viewChat').hidden = true;
+      history.replaceState(null, '', '#group=' + group.id);
+      document.body.classList.remove('chat-open', 'side-open');
+    }
+  });
+}
 ['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = !voiceUI; $(id).title = id.includes('Mic') || id === '#micBtn' ? 'Grabar una nota de voz' : 'Conversación de voz'; });
 // A reload is not proof of delivery: never replay uncertain actions.
 for (const chat of chats) for (const entry of messages[chat.id] || []) {
@@ -523,4 +534,4 @@ syncPills();
 // A local authorization bit is not owner verification: start with history hidden.
 cloudSync.revoke();
 refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-7').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-8').catch(() => {}));
