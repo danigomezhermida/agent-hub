@@ -2,8 +2,9 @@
   "name": "agent-hub",
   "label": "Agent Hub",
   "icon": "Bot",
-  "version": "2.2.0",
+  "version": "2.4.0",
   "description": "Conector de navegador con login Hermes; sin claves compartidas.",
   "tab": { "path": "/agent-hub", "position": "after:skills" },
+  "api": "plugin_api.py",
   "entry": "dist/agent-hub.js"
 }

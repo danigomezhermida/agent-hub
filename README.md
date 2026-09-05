@@ -28,7 +28,7 @@ La ventana solo permite el origen de producción indicado en el código, comprue
 - Listas locales: no hay sincronización multidispositivo del listado de Agent Hub.
 - Solo el perfil `limpatexdev-cloud` está conectado; los otros agentes/grupos siguen siendo prototipos.
 - Modelo y esfuerzo se envían al crear una sesión nueva; para cambiarlos, abrir un chat nuevo. `Modelo de Hermes` utiliza la configuración real del perfil.
-- Audio/transcripción y voz en vivo no forman parte de esta conexión; necesitan otra implementación/configuración.
+- La implementación de notas y llamada continua por turnos está en [docs/voice.md](docs/voice.md). Usa STT/TTS de Hermes y necesita el plugin versionado 2.3.0 instalado junto al frontend; no implica que esté publicada. No es OpenAI Realtime/WebRTC. Audio persistido localmente, sin sincronización ni separación de cuentas en un navegador compartido.
 - No se autorizan automáticamente acciones sensibles: si un turno pide aprobación, atenderlo en Hermes.
 
 ## Instalación del plugin

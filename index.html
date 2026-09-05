@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260905-4" />
+  <link rel="stylesheet" href="styles.css?v=20260905-7" />
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebApplication","name":"Agent Hub Limpatex","applicationCategory":"BusinessApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0"}}
   </script>
@@ -39,6 +39,12 @@
         <button class="side-link" id="newGroupBtn">＋ Crear grupo</button>
       </nav>
       <div class="side-bottom">
+        <div class="sync-panel" aria-labelledby="syncTitle">
+          <strong id="syncTitle">Cuenta personal</strong>
+          <button class="sync-btn" id="syncBtn" type="button">Sincronizar</button>
+          <span id="syncStatus" role="status" aria-live="polite">Sincroniza para mostrar tu historial.</span>
+          <button class="sync-reload" id="reloadRemoteBtn" type="button" hidden>Cargar versión remota</button>
+        </div>
         <div class="conn" id="connBox"><span class="conn-dot" id="connDot"></span><span id="connText">Comprobando…</span></div>
         <div class="user-row">
           <span class="user-avatar">D</span>
@@ -87,6 +93,7 @@
           <div class="thread-actions">
             <button class="model-pill" id="modelPillChat">gpt-5.6-luna <span aria-hidden="true">⌄</span></button>
             <button class="model-pill" id="effortPillChat">medium <span aria-hidden="true">⌄</span></button>
+            <button class="side-icon" id="recoverBtn" aria-label="Consultar resultado sin reenviar" title="Consultar resultado sin reenviar">↻</button>
             <button class="side-icon" id="chatNewBtn" aria-label="Nuevo chat">✎</button>
           </div>
         </header>
@@ -140,8 +147,27 @@
       <div class="choice-list" id="choiceList"></div>
     </div>
   </div>
+  <dialog id="voiceDialog" class="voice-dialog" aria-labelledby="voiceTitle" hidden>
+    <h2 id="voiceTitle">Nota de voz</h2>
+    <p id="voiceStatus" role="status" aria-live="polite">Preparando…</p>
+    <p class="voice-duration" id="voiceDuration" aria-label="Duración">0:00</p>
+    <audio id="voicePreview" controls aria-label="Revisar grabación" hidden></audio>
+    <div class="voice-controls">
+      <button id="voiceFinish">Finalizar grabación</button>
+      <button id="voiceSend" hidden>Enviar nota</button>
+      <button id="voiceMute" aria-pressed="false" hidden>Silenciar micrófono</button>
+      <button id="voiceInterrupt" hidden>Interrumpir al agente</button>
+      <button id="voiceRetry" hidden>Volver a conectar</button>
+      <button id="voiceCancel">Cancelar</button>
+    </div>
+    <p class="voice-privacy">Audio guardado en este dispositivo y sincronizado con tu cuenta personal verificada. Transcripción y voz mediante Hermes. Durante la llamada mantén abierta su ventana. Usa auriculares para reducir el eco.</p>
+  </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script src="cloud-connection.js?v=20260905-4"></script>
-  <script src="app.js?v=20260905-4"></script>
+  <script src="cloud-connection.js?v=20260905-7"></script>
+  <script src="recovery-ui.js?v=20260905-7"></script>
+  <script src="cloud-sync.js?v=20260905-6"></script>
+  <script src="voice-engine.js?v=20260905-7"></script>
+  <script src="voice-ui.js?v=20260905-7"></script>
+  <script src="app.js?v=20260905-7"></script>
 </body>
 </html>

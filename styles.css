@@ -9,6 +9,27 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%}
+
+/* Voice-only surfaces: fixed dialog prevents composer layout jumps. */
+.voice-dialog{box-sizing:border-box;width:min(440px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;border:1px solid var(--line,#36383d);border-radius:20px;padding:24px;background:var(--panel,#212328);color:var(--text,#f3f3f3);font:inherit}
+.voice-dialog::backdrop{background:#0008}
+.voice-dialog h2{margin:0 0 16px;font-size:20px}
+.voice-dialog #voiceStatus{min-height:48px;line-height:1.5}
+.voice-duration{font-variant-numeric:tabular-nums;font-size:26px;margin:12px 0}
+.voice-dialog audio,.msg-audio audio{width:100%;max-width:100%}
+.voice-controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.voice-controls button,.audio-retry{font:inherit;color:inherit;min-height:44px;border:1px solid #505258;background:#292b30;border-radius:12px;padding:10px 14px;cursor:pointer}
+.voice-controls button:hover,.audio-retry:hover{background:#373940}
+.voice-controls button:focus-visible,.audio-retry:focus-visible,.tool-btn:focus-visible{outline:2px solid #bdb7ff;outline-offset:3px}
+.voice-controls button:disabled,.tool-btn:disabled{opacity:.45;cursor:not-allowed}
+.voice-controls button[aria-pressed="true"]{background:#543f67;border-color:#c6b2dc}
+.voice-dialog[data-state="listening"] #voiceStatus{color:#a9dfbb}
+.voice-dialog[data-state="speaking"] #voiceStatus{color:#c9baff}
+.voice-privacy,.audio-label{font-size:12px;color:#b6b8bf;line-height:1.5}
+.transcript{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0 0}
+.msg-audio{min-width:240px;max-width:min(420px,100%);box-sizing:border-box}
+@media(max-width:760px){.voice-dialog{padding:18px}.voice-controls button{flex:1 1 130px}.msg-audio{min-width:0;width:100%}}
+
 body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
@@ -38,6 +59,15 @@ button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px soli
 .side-link{text-align:left;padding:9px 10px;border-radius:8px;font-size:14px;color:var(--text-3)}
 .side-link:hover{background:var(--hover);color:var(--text)}
 .side-bottom{border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:8px}
+dialog[data-turn-evidence]{max-width:min(680px,calc(100vw - 32px));max-height:85dvh;overflow:auto;padding:24px;border:1px solid var(--border);border-radius:16px}dialog[data-turn-evidence] pre{white-space:pre-wrap;overflow-wrap:anywhere}dialog[data-turn-evidence] button{margin:8px 8px 0 0;padding:10px}
+.sync-panel{display:grid;gap:7px;padding:8px;border:1px solid var(--border);border-radius:10px;font-size:12px;color:var(--text-3)}
+.sync-panel strong{color:var(--text-2);font-size:12px}
+.sync-btn,.sync-reload{min-height:38px;border:1px solid var(--border-2);border-radius:9px;padding:7px 10px;color:var(--text);font-weight:600}
+.sync-btn:hover,.sync-reload:hover{background:var(--hover)}
+.sync-btn:disabled{opacity:.45;cursor:not-allowed}
+.sync-reload{color:#ffd2d2;border-color:rgba(229,72,77,.55)}
+.sync-locked .chat-list,.sync-locked .message-list{visibility:hidden}
+.sync-locked .composer{opacity:.55}
 .conn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-3);padding:2px 8px}
 .conn-dot{width:8px;height:8px;border-radius:50%;background:var(--text-4)}
 .conn-dot.ok{background:#46a758}.conn-dot.bad{background:var(--danger)}

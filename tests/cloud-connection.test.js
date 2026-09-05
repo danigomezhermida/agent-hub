@@ -4,6 +4,8 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const crypto = require('node:crypto').webcrypto;
 const clientSource = fs.readFileSync('cloud-connection.js', 'utf8');
+const storageSource = fs.readFileSync('hermes-plugin/dashboard/dist/storage-transport.js', 'utf8');
+const recoverySource = fs.readFileSync('hermes-plugin/dashboard/dist/turn-recovery.js', 'utf8');
 const connectorSource = fs.readFileSync('hermes-plugin/dashboard/dist/connector.js', 'utf8');
 
 function clientHarness() {
@@ -44,7 +46,7 @@ function receive(h, popup, data, overrides = {}) {
 }
 function authorize(h) {
   h.api.open(); h.tick(); const popup = h.popups.at(-1);
-  receive(h, popup, { type: 'ready', connected: true });
+  receive(h, popup, { type: 'ready', connected: true, ownerScope: 'personal' });
   return popup;
 }
 
@@ -76,14 +78,29 @@ function connectorHarness(search = '?mode=turn', seededGrant = true) {
       setItem: (key, value) => store.set(key, String(value)),
       removeItem: key => store.delete(key)
     },
-    fetch: async () => { fetchCount += 1; return { ok: true, status: 200, json: async () => ({ ticket: 'opaque-test-ticket' }) }; },
+    fetch: async (url, options={}) => {
+      fetchCount += 1; const target=String(url);
+      const reply=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+      if(target==='/api/plugins/agent-hub/identity')return reply({scope:'personal'});
+      if(target==='/api/plugins/agent-hub/bindings'&&(!options.method||options.method==='GET'))return reply({bindings:{}});
+      if(target.startsWith('/api/plugins/agent-hub/bindings/')&&options.method==='PUT')return reply({sessionId:JSON.parse(options.body).sessionId});
+      if(/^\/api\/plugins\/agent-hub\/turns\//.test(target)&&options.method==='POST'){
+        const body=JSON.parse(options.body);return reply({claimed:true,turn:{...body,state:'pending'}});
+      }
+      if(/^\/api\/plugins\/agent-hub\/turns\//.test(target)&&options.method==='PATCH')return reply({turn:{...JSON.parse(options.body)}});
+      if(target==='/api/auth/ws-ticket')return reply({ticket:'opaque-test-ticket'});
+      throw new Error(`unexpected mocked HTTP ${target}`);
+    },
     WebSocket: MockWebSocket,
+    AbortController, Response, TextEncoder, Uint8Array, Blob,
     setTimeout, clearTimeout, setInterval() {}, console
   };
   context.window = context;
   context.opener = parentWindow;
   context.addEventListener = (type, fn) => { listeners[type] = fn; };
   context.close = () => {};
+  vm.runInNewContext(storageSource, context);
+  vm.runInNewContext(recoverySource, context);
   vm.runInNewContext(connectorSource, context);
   return { context, listeners, posts, store, sockets, elements, parentWindow, fetchCount: () => fetchCount };
 }
@@ -117,7 +134,7 @@ test('popup closed before ready rejects queued message immediately', async () =>
 test('completed result detaches old popup and next turn uses a unique window', async () => {
   const h = clientHarness(); authorize(h);
   const first = h.api.chat({ message: 'uno', chatId: 'chat_1' });
-  const popup1 = h.popups.at(-1); h.tick(); receive(h, popup1, { type: 'ready', connected: true });
+  const popup1 = h.popups.at(-1); h.tick(); receive(h, popup1, { type: 'ready', connected: true, ownerScope: 'personal' });
   const req1 = [...h.sent].reverse().find(item => item.popup === popup1 && item.data.type === 'chat');
   receive(h, popup1, { type: 'result', requestId: req1.data.requestId, ok: true, result: { text: 'uno' } });
   assert.equal((await first).text, 'uno');
@@ -125,7 +142,7 @@ test('completed result detaches old popup and next turn uses a unique window', a
   const popup2 = h.popups.at(-1);
   assert.notEqual(popup2, popup1);
   assert.notEqual(popup2.name, popup1.name);
-  h.tick(); receive(h, popup2, { type: 'ready', connected: true });
+  h.tick(); receive(h, popup2, { type: 'ready', connected: true, ownerScope: 'personal' });
   const req2 = [...h.sent].reverse().find(item => item.popup === popup2 && item.data.type === 'chat');
   receive(h, popup2, { type: 'result', requestId: req2.data.requestId, ok: true, result: { text: 'dos' } });
   assert.equal((await second).text, 'dos');
@@ -165,15 +182,16 @@ test('revoke mode clears Hermes grant and confirms only after channel hello', ()
   assert.ok(h.posts.some(item => item.data.type === 'revoked' && item.data.channelId === 'revoke_1'));
 });
 
-test('websocket closure rejects an outstanding turn without waiting for timeout', async () => {
-  const h = connectorHarness('?mode=turn', true); await flush();
-  const ws = h.sockets[0]; ws.open(); await flush();
+test('mocked backend: websocket closure rejects an outstanding ledger-claimed turn without waiting for timeout', async () => {
+  const h = connectorHarness('?mode=turn', true);
+  for(let i=0;i<10&&!h.sockets[0];i++)await flush();
+  const ws = h.sockets[0]; assert.ok(ws); ws.open(); await flush();
   h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'turn_1', type: 'hello' } });
-  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'turn_1', type: 'chat', requestId: 'req_1', chatId: 'chat_1', message: 'hola', model: 'default', effort: 'low' } });
-  await flush();
-  const create = ws.sent.find(frame => frame.method === 'session.create');
+  h.listeners.message({ origin: 'https://agent-hub-theta-five.vercel.app', source: h.parentWindow, data: { channel: 'agenthub.sso.v2', channelId: 'turn_1', type: 'chat', requestId: 'req_1', clientMessageId: 'message_1', chatId: 'chat_1', message: 'hola', model: 'default', effort: 'low' } });
+  for(let i=0;i<20&&!ws.sent.some(frame=>frame.method==='session.create');i++)await flush();
+  const create = ws.sent.find(frame => frame.method === 'session.create'); assert.ok(create);
   ws.frame({ jsonrpc: '2.0', id: create.id, result: { session_id: 'live_1', stored_session_id: 'stored_1' } });
-  await flush();
+  for(let i=0;i<20&&!ws.sent.some(frame=>frame.method==='prompt.submit');i++)await flush();
   assert.ok(ws.sent.some(frame => frame.method === 'prompt.submit'));
   ws.readyState = 3; ws.onclose(); await flush(); await flush();
   const result = h.posts.find(item => item.data.type === 'result' && item.data.requestId === 'req_1');

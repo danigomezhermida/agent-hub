@@ -15,12 +15,16 @@ const EFFORTS = ['low', 'medium', 'high'];
 const MODEL_LABEL = { 'default': 'Modelo de Hermes', 'gpt-5.6-luna': 'gpt-5.6-luna', 'claude-opus': 'claude-opus', 'gpt-4.1-mini': 'gpt-4.1-mini' };
 const storage = { chats: 'agenthub.chats.v1', groups: 'agenthub.groups.v1', messages: 'agenthub.messages.v2', model: 'agenthub.model.v1', effort: 'agenthub.effort.v1', sessions: 'agenthub.sessions.v1' };
 const read = (key, fallback) => { try { const raw = localStorage.getItem(key); return raw ? (JSON.parse(raw) ?? fallback) : fallback; } catch { return fallback; } };
+const cloneJSON = value => JSON.parse(JSON.stringify(value));
 const $ = (id) => document.querySelector(id);
 const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
 const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
 
 const snapshotKey = 'agenthub.conversations.v3';
+const legacySnapshotKey = 'agenthub.conversations.legacy.v3';
 const snapshot = read(snapshotKey, null);
+// Preserve the exact pre-sync source. It is never removed, including on revocation.
+if (snapshot && !localStorage.getItem(legacySnapshotKey)) localStorage.setItem(legacySnapshotKey, JSON.stringify(snapshot));
 let chats = snapshot?.chats || read(storage.chats, seedChats);
 let groups = read(storage.groups, seedGroups);
 let messages = snapshot?.messages || read(storage.messages, {});
@@ -34,12 +38,16 @@ if (!MODELS.includes(selectedModel)) selectedModel = 'gpt-5.6-luna';
 if (!EFFORTS.includes(selectedEffort)) selectedEffort = 'medium';
 let selectedIndex = 0;
 let activeChat = null;
-let mediaRecorder = null;
-let recordingChunks = [];
+let voiceUI = null;
+let cloudSync = null;
+let preservedLocalSnapshot = null;
+const mediaURLs = new Map();
 
+const currentSnapshot = () => ({ chats, messages, sessions });
 const save = () => {
   // Commit related records together: a failed write cannot leave an orphan.
-  localStorage.setItem(snapshotKey, JSON.stringify({ chats, messages, sessions }));
+  localStorage.setItem(snapshotKey, JSON.stringify(currentSnapshot()));
+  preservedLocalSnapshot = cloneJSON(currentSnapshot());
 
   localStorage.setItem(storage.groups, JSON.stringify(groups));
 
@@ -61,14 +69,51 @@ async function api(path, options = {}) {
 function showToast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => t.classList.remove('show'), 2400); }
 
 /* ---------- session / connection ---------- */
+function syncReady() { return Boolean(cloudSync?.isReady() && window.hermesCloud.ownerScope?.() === 'personal'); }
+function setSyncGate() {
+  const ready = syncReady();
+  document.body.classList.toggle('sync-locked', !ready);
+  ['#newChatBtn','#mobileNewChatBtn','#chatNewBtn','#heroInput','#messageInput','#heroSendBtn','#sendBtn','#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { const el = $(id); if (el) el.disabled = !ready || sending || (voiceUI?.busy ?? false); });
+  $('#recoverBtn').disabled = !ready || sending || Boolean(voiceUI?.busy);
+  if (activeChat?.archived) ['#messageInput','#sendBtn','#micBtn','#voiceBtn'].forEach(id => $(id).disabled = true);
+  $('#syncBtn').disabled = !window.hermesCloud.isConnected() || window.hermesCloud.isRevoking();
+}
+function releaseMediaURLs() {
+  for (const [element, url] of mediaURLs) { element.pause(); element.removeAttribute('src'); URL.revokeObjectURL(url); }
+  mediaURLs.clear();
+}
+function clearSyncedView() {
+  if (!preservedLocalSnapshot) preservedLocalSnapshot = cloneJSON(currentSnapshot());
+  releaseMediaURLs(); document.querySelectorAll('dialog[data-turn-evidence]').forEach(dialog => dialog.remove()); activeChat = null; chats = []; messages = {}; sessions = {};
+  $('#messageList').textContent = ''; renderLists(); renderHome();
+  $('#viewChat').hidden = true; $('#viewHome').hidden = false; document.body.classList.remove('chat-open');
+  setSyncGate();
+}
+function applySyncedSnapshot(value) {
+  chats = value.chats; messages = value.messages; sessions = value.sessions;
+  save(); renderLists($('#searchInput').value); renderHome();
+  const restored = chats.find(c => '#chat=' + c.id === location.hash);
+  if (restored) openChat(restored); else showHome();
+  setSyncGate();
+}
+function syncStatus(status) {
+  $('#syncStatus').textContent = status.message || '';
+  $('#reloadRemoteBtn').hidden = status.state !== 'conflict';
+  setSyncGate();
+  if (status.state === 'conflict' || status.state === 'error') showToast(status.message);
+}
 async function refreshSession() {
   if (window.hermesCloud.isRevoking()) {
-    $('#loginOverlay').classList.remove('open'); setConn(false, 'Desconexión pendiente'); return false;
+    cloudSync?.revoke(); $('#loginOverlay').classList.remove('open'); setConn(false, 'Desconexión pendiente'); setSyncGate(); return false;
   }
   if (window.hermesCloud.isConnected()) {
-    $('#loginOverlay').classList.remove('open'); setConn(true, window.hermesCloud.isLive() ? 'Hermes conectado' : 'Hermes autorizado'); return true;
+    $('#loginOverlay').classList.remove('open');
+    if (syncReady()) setConn(true, 'Hermes sincronizado');
+    else setConn(false, 'Hermes autorizado · sincroniza');
+    if (cloudSync?.isReady() && !window.hermesCloud.ownerScope?.()) cloudSync.revoke();
+    setSyncGate(); return syncReady();
   }
-  setConn(false, 'Conectar Hermes'); showLogin('Usa tu sesión de Hermes. No necesitas API key ni contraseña de Vercel.'); return false;
+  cloudSync?.revoke(); setConn(false, 'Conectar Hermes'); showLogin('Usa tu sesión de Hermes. No necesitas API key ni contraseña de Vercel.'); setSyncGate(); return false;
 }
 window.addEventListener('hermes-connection', refreshSession);
 window.addEventListener('hermes-attention', () => showToast('Hermes necesita tu intervención en su dashboard.'));
@@ -126,6 +171,7 @@ function syncPills() {
 
 /* ---------- views ---------- */
 function showHome() {
+  if (voiceUI?.busy) { showToast('Finaliza la voz antes de cambiar de conversación.'); return; }
   activeChat = null;
   history.replaceState(null, '', location.pathname + location.search);
   $('#viewChat').hidden = true;
@@ -134,6 +180,7 @@ function showHome() {
   renderLists($('#searchInput').value); renderHome();
 }
 function openChat(chat) {
+  if (voiceUI && !voiceUI.canNavigate(chat)) { showToast('Finaliza la voz antes de cambiar de conversación.'); return; }
   activeChat = chat;
   history.replaceState(null, '', '#chat=' + chatKey(chat));
   selectedModel = chat.model || selectedModel;
@@ -156,6 +203,7 @@ function closeChat() { showHome(); }
 /* ---------- messages ---------- */
 function renderMessages(chat) {
   const box = $('#messageList');
+  releaseMediaURLs();
   const history = historyOf(chat);
   if (!history.length) {
     box.textContent = 'Escribe un mensaje para comenzar.';
@@ -163,10 +211,12 @@ function renderMessages(chat) {
   }
   box.innerHTML = history.map((m) => {
     if (m.role === 'assistant' || m.role === 'agent') return `<div class="msg-agent"><span class="who">HERMES</span>${escapeHtml(m.text || '')}</div>`;
-    if (m.role === 'audio') return `<div class="msg-user"><div>${escapeHtml(m.text || 'Audio enviado')}</div>${m.audioUrl ? `<div class="msg-audio"><audio controls src="${m.audioUrl}"></audio></div>` : ''}</div>`;
+    if (m.role === 'audio') return `<div class="msg-user msg-audio" data-message-id="${escapeHtml(m.id || '')}"><span class="audio-label">${escapeHtml(AUDIO_STATES[m.status] || 'Nota de voz')} · ${Math.round((m.duration || 0) / 1000)} s</span>${m.audioId ? `<audio controls preload="metadata" aria-label="Reproducir nota de voz" data-audio-id="${escapeHtml(m.audioId)}"></audio>` : '<span>Audio antiguo no recuperable</span>'}${m.text ? `<p class="transcript">${escapeHtml(m.text)}</p>` : ''}${m.status === 'transcription_error' ? `<button class="audio-retry" data-retry-audio="${escapeHtml(m.id)}">Reintentar transcripción</button>` : ''}</div>`;
     return `<div class="msg-user">${escapeHtml(m.text || '')}</div>`;
   }).join('');
   if (chat.error) { const notice = document.createElement('div'); notice.setAttribute('role', 'alert'); notice.textContent = chat.error; box.appendChild(notice); }
+  hydrateAudio(chat, box);
+  box.querySelectorAll('[data-retry-audio]').forEach(button => { button.onclick = () => voiceUI?.retryNote(chat, history.find(m => m.id === button.dataset.retryAudio)); });
   box.scrollTop = box.scrollHeight;
 }
 function rememberDraft(input) {
@@ -181,45 +231,87 @@ function sendError(message, input) {
   retry.onclick = () => sendText(input.value.trim(), input);
   box.appendChild(retry); input.closest('.composer').after(box);
 }
+function commitMessage(chat, entry) {
+  const key = chatKey(chat);
+  const previous = messages[key] || [];
+  if (entry.id && previous.some(m => m.id === entry.id)) return false;
+  const nextMessages = { ...messages, [key]: [...previous, entry] };
+  const nextChats = chats.includes(chat) ? chats : [chat, ...chats];
+  localStorage.setItem(snapshotKey, JSON.stringify({ chats: nextChats, messages: nextMessages, sessions }));
+  chats = nextChats; messages = nextMessages;
+  preservedLocalSnapshot = cloneJSON(currentSnapshot());
+  openChat(chat);
+  return true;
+}
+function persistMessages(chat) {
+  localStorage.setItem(snapshotKey, JSON.stringify({ chats, messages, sessions }));
+  preservedLocalSnapshot = cloneJSON(currentSnapshot());
+  if (activeChat === chat) renderMessages(chat);
+  renderLists($('#searchInput').value);
+}
+function setSending(value) {
+  sending = value;
+  ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = value || Boolean(voiceUI?.busy) || !syncReady());
+}
+async function respondToMessage(chat, entry, leaseReady = Promise.resolve()) {
+  const key = chatKey(chat);
+  if (entry.delivery === 'complete' || entry.delivery === 'uncertain') throw new Error('Este turno ya fue enviado. No se reenviará.');
+  // The user entry and every referenced audio blob must be remotely durable first.
+  await leaseReady;
+  await cloudSync.beforeTurn();
+  entry.delivery = 'sending';
+  persistMessages(chat);
+  try {
+    const data = await window.hermesCloud.chat({ message: entry.text, chatId: key, clientMessageId: entry.id, model: chat.model, effort: chat.effort });
+    if (data?.sessionId) sessions[key] = data.sessionId;
+    const reply = { id: entry.id + '-reply', role: 'assistant', text: data?.text || 'Sin respuesta.' };
+    if (!messages[key].some(m => m.id === reply.id)) messages[key].push(reply);
+    entry.delivery = 'complete'; entry.status = 'complete'; delete chat.error;
+    persistMessages(chat);
+    try { await cloudSync.afterTurn(); }
+    catch (syncError) { showToast(syncError.message || 'La respuesta quedó local; sincroniza de nuevo.'); }
+    return reply.text;
+  } catch (error) {
+    entry.delivery = 'uncertain'; entry.status = 'uncertain';
+    chat.error = 'No se pudo confirmar el turno. Comprueba Hermes antes de reenviarlo.';
+    try { persistMessages(chat); await cloudSync.afterTurn(); } catch { showToast('No recargues: no se pudo sincronizar el estado del turno.'); }
+    throw error;
+  }
+}
 async function sendText(text, input = $('#messageInput')) {
-  if (!text || sending) return;
+  if (!text || sending || voiceUI?.busy) return;
+  if (input.id !== 'heroInput' && activeChat?.archived) { showToast('Este hilo está archivado. Abre una conversación nueva; no reenvíes automáticamente el turno anterior.'); return; }
   rememberDraft(input);
+  if (input.id !== 'heroInput' && activeChat && (messages[activeChat.id] || []).some(m => ['uncertain','sending'].includes(m.delivery))) { showToast('Consulta el resultado pendiente antes de enviar otro mensaje a este hilo.'); return; }
   if (!window.hermesCloud.isConnected()) {
     showLogin(window.hermesCloud.isRevoking() ? 'Completa la desconexión pendiente.' : 'Conecta tu sesión de Hermes para enviar. Tu borrador está guardado.');
     return;
   }
-  sending = true;
-  ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = true);
+  if (!syncReady()) { showToast('Pulsa Sincronizar antes de enviar. Tu borrador se conserva.'); return; }
+  let leaseReady;
+  try { leaseReady = window.hermesCloud.openVoice(); leaseReady.catch(() => {}); }
+  catch (error) { showToast(error.message); return; }
+  setSending(true);
   document.getElementById('sendError')?.remove();
   const isNew = input.id === 'heroInput' || !activeChat;
   const chat = isNew ? newConversation(text.slice(0, 42), agents[0]) : activeChat;
-  const key = chatKey(chat);
-  const previous = messages[key] || [];
-  const entry = { role: 'user', text };
-  const nextMessages = { ...messages, [key]: [...previous, entry] };
-  const nextChats = chats.includes(chat) ? chats : [chat, ...chats];
+  const entry = { id: crypto.randomUUID(), role: 'user', text };
   chat.model = selectedModel; chat.effort = selectedEffort;
   delete chat.error;
-  try {
-    // One atomic local commit, before opening the remote turn.
-    localStorage.setItem(snapshotKey, JSON.stringify({chats: nextChats, messages: nextMessages, sessions}));
-  } catch {
-    sending = false;
-    ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = false);
+  try { commitMessage(chat, entry); }
+  catch {
+    setSending(false);
+    window.hermesCloud.closeVoice?.();
     sendError('No se pudo guardar la conversación. El texto sigue aquí.', input);
     return;
   }
-  chats = nextChats; messages = nextMessages;
-  chat.model = selectedModel; chat.effort = selectedEffort;
   input.value = ''; rememberDraft(input); autoGrow(input);
   openChat(chat);
   setConn(true, 'Pensando…');
   $('#messageList').insertAdjacentHTML('beforeend', '<div class="msg-agent" id="typingRow" role="status">Hermes está respondiendo…</div>');
   try {
     // Keep popup creation synchronous with the original click/Enter.
-    const data = await window.hermesCloud.chat({ message: text, chatId: key, model: chat.model, effort: chat.effort });
-    if (data?.sessionId) sessions[key] = data.sessionId;
-    messages[key].push({ role: 'assistant', text: data?.text || 'Sin respuesta.' });
+    await respondToMessage(chat, entry, leaseReady);
   } catch (error) {
     // Never disguise transport/auth failures as agent replies or auto-retry an uncertain turn.
     chat.error = error.message || 'Sin conexión con Hermes.';
@@ -227,64 +319,36 @@ async function sendText(text, input = $('#messageInput')) {
   } finally {
     try { localStorage.setItem(snapshotKey, JSON.stringify({chats, messages, sessions})); }
     catch { showToast('No se pudo guardar la última respuesta. No recargues todavía.'); }
-    sending = false;
-    ['#heroSendBtn', '#sendBtn'].forEach(id => $(id).disabled = false);
+    window.hermesCloud.closeVoice?.();
+    setSending(false);
     if (activeChat === chat) renderMessages(chat);
     renderLists($('#searchInput').value); refreshSession();
   }
 }
 
-/* ---------- audio ---------- */
-const blobToBase64 = (blob) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.onerror = reject; r.readAsDataURL(blob); });
-async function toggleRecording(btn) {
-  const chat = activeChat || chats[selectedIndex];
-  if (!chat) return;
-  if (mediaRecorder && mediaRecorder.state === 'recording') { mediaRecorder.stop(); return; }
-  if (!navigator.mediaDevices || !window.MediaRecorder) { showToast('Este navegador no permite grabar audio'); return; }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    recordingChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordingChunks.push(e.data); };
-    mediaRecorder.onstop = async () => {
-      document.querySelectorAll('.tool-btn.recording').forEach((b) => b.classList.remove('recording'));
-      stream.getTracks().forEach((t) => t.stop());
-      const blob = new Blob(recordingChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      if (blob.size < 1000) { showToast('Grabación demasiado corta'); return; }
-      await sendAudio(blob, chat);
-    };
-    mediaRecorder.start();
-    if (btn) btn.classList.add('recording');
-    showToast('Grabando… pulsa de nuevo para enviar');
-  } catch { showToast('Permiso de micrófono denegado'); }
+/* ---------- audio presentation (binary persistence lives in voice-engine) ---------- */
+const AUDIO_STATES = {uploading: 'Guardando audio…', transcribing: 'Transcribiendo…', processing: 'Esperando a Hermes…', complete: 'Nota de voz', transcription_error: 'No se pudo transcribir', uncertain: 'Turno sin confirmar: comprueba Hermes'};
+async function hydrateAudio(chat, box) {
+  if (!voiceUI) return;
+  for (const element of box.querySelectorAll('audio[data-audio-id]')) {
+    const id = element.dataset.audioId;
+    try {
+      const blob = cloudSync ? await cloudSync.getAudio(id, chat.id) : await voiceUI.store.get(id, chat.id);
+      if (!element.isConnected || activeChat !== chat) continue;
+      if (!blob) { element.replaceWith(document.createTextNode('Audio no disponible en este dispositivo.')); continue; }
+      const url = URL.createObjectURL(blob); mediaURLs.set(element, url); element.src = url;
+    } catch { if (element.isConnected) element.replaceWith(document.createTextNode('No se pudo cargar el audio. Recarga para reintentar.')); }
+  }
 }
-async function sendAudio(blob, chat) {
-  if (!activeChat) openChat(chat);
-  const history = historyOf(chat);
-  const localUrl = URL.createObjectURL(blob);
-  history.push({ role: 'audio', text: 'Audio enviado · transcribiendo…', audioUrl: localUrl });
-  save(); renderMessages(chat);
-  try {
-    const audioBase64 = await blobToBase64(blob);
-    const { status, data } = await api('/api/audio', { method: 'POST', body: JSON.stringify({ audioBase64, mimeType: blob.type, sessionId: sessionOf(chat), model: selectedModel, effort: selectedEffort }) });
-    if (status === 401) history.push({ role: 'assistant', text: 'Necesitas iniciar sesión para enviar audio.' });
-    else if (status === 501) history.push({ role: 'assistant', text: 'Audio recibido, pero la transcripción aún no está configurada.' });
-    else if (status !== 200) history.push({ role: 'assistant', text: 'No se pudo procesar el audio.' });
-    else {
-      if (data && data.sessionId) sessions[chatKey(chat)] = data.sessionId;
-      const audioMsg = [...history].reverse().find((i) => i.role === 'audio');
-      if (audioMsg && data && data.transcript) audioMsg.text = `Audio: ${data.transcript}`;
-      history.push({ role: 'assistant', text: (data && data.text) || 'Audio transcrito sin respuesta.' });
-    }
-  } catch { history.push({ role: 'assistant', text: 'Sin conexión para enviar el audio.' }); }
-  save(); renderMessages(chat);
+function voiceTarget(fromHome) {
+  return fromHome || !activeChat ? newConversation('Conversación de voz', agents[0]) : activeChat;
 }
-async function voiceInfo() {
-  try {
-    const { status } = await api('/api/voice');
-    if (status === 401) { showLogin('Inicia sesión para usar la voz.'); return; }
-    showToast('Voz en vivo: canal separado planificado, usa audio grabado por ahora');
-  } catch { showToast('Sin conexión con el backend'); }
+function authorizeVoice() {
+  if (activeChat && (messages[activeChat.id] || []).some(m => ['uncertain','sending'].includes(m.delivery))) { showToast('Consulta el resultado pendiente antes de continuar con voz.'); return false; }
+  if (activeChat?.archived) { showToast('Este hilo está archivado. Abre una conversación nueva.'); return false; }
+  if (!window.hermesCloud.isConnected()) { showLogin('Conecta Hermes antes de usar el micrófono.'); return false; }
+  if (!syncReady()) { showToast('Pulsa Sincronizar antes de usar la voz.'); return false; }
+  return true;
 }
 
 /* ---------- dialogs / menus ---------- */
@@ -348,10 +412,10 @@ $('#sendBtn').addEventListener('click', () => sendText($('#messageInput').value.
     }
   });
 });
-$('#heroMicBtn').addEventListener('click', (e) => toggleRecording(e.currentTarget));
-$('#micBtn').addEventListener('click', (e) => toggleRecording(e.currentTarget));
-$('#heroVoiceBtn').addEventListener('click', voiceInfo);
-$('#voiceBtn').addEventListener('click', voiceInfo);
+$('#heroMicBtn').addEventListener('click', () => { if (!sending) voiceUI?.startNote(voiceTarget(true)); });
+$('#micBtn').addEventListener('click', () => { if (!sending) voiceUI?.startNote(voiceTarget(false)); });
+$('#heroVoiceBtn').addEventListener('click', () => voiceUI?.startLive(voiceTarget(true)));
+$('#voiceBtn').addEventListener('click', () => voiceUI?.startLive(voiceTarget(false)));
 
 const placeMenus = (anchor, menu) => toggleMenu(menu, anchor);
 ['#modelPill', '#modelPillChat'].forEach((s) => $(s).addEventListener('click', (e) => { e.stopPropagation(); placeMenus(e.currentTarget, '#modelMenu'); }));
@@ -360,24 +424,103 @@ document.addEventListener('click', () => { $('#modelMenu').hidden = true; $('#ef
 document.querySelectorAll('#modelMenu button').forEach((b) => b.addEventListener('click', () => { selectedModel = b.dataset.model; save(); syncPills(); renderHome(); showToast(`Modelo: ${selectedModel}`); }));
 document.querySelectorAll('#effortMenu button').forEach((b) => b.addEventListener('click', () => { selectedEffort = b.dataset.effort; save(); syncPills(); renderHome(); showToast(`Esfuerzo: ${selectedEffort}`); }));
 
+$('#syncBtn').addEventListener('click', () => {
+  const operation = cloudSync.syncFromUserGesture();
+  operation.then(() => { setConn(true, 'Hermes sincronizado'); setSyncGate(); }).catch(error => {
+    if (error.code !== 'conflict') syncStatus({ state: 'error', message: error.message });
+  });
+});
+$('#reloadRemoteBtn').addEventListener('click', () => {
+  let ready;
+  try { ready = window.hermesCloud.openVoice(); ready.catch(() => {}); }
+  catch (error) { showToast(error.message); return; }
+  ready.then(() => cloudSync.reloadRemote()).catch(error => syncStatus({ state: 'error', message: error.message }));
+});
 $('#loginForm').addEventListener('submit', e => {
   e.preventDefault();
   try { window.hermesCloud.open(); $('#loginStatus').textContent = 'Pulsa Conectar en la ventana de Hermes y vuelve aquí.'; }
   catch (error) { $('#loginStatus').textContent = error.message; }
 });
 $('#logoutBtn').addEventListener('click', async () => {
-  try { await window.hermesCloud.disconnect(); showToast('Conexión con Hermes revocada.'); }
+  await voiceUI?.end();
+  try { await window.hermesCloud.disconnect(); cloudSync.revoke(); showToast('Conexión con Hermes revocada.'); }
   catch (error) { showToast(error.message); }
   refreshSession();
 });
 document.addEventListener('keydown', (e) => {
+  if (voiceUI?.busy) return;
   if (e.key === 'Escape') { closeDialog(); if (activeChat) closeChat(); document.body.classList.remove('side-open'); }
   if ((e.key.toLowerCase() === 'n' || e.key.toLowerCase() === 'k') && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) startNewChat();
 });
 
-['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = true; $(id).title = 'Audio y voz pendientes de conexión'; });
-const restoredChat = chats.find(c => '#chat=' + c.id === location.hash);
-syncPills(); renderLists(); renderHome();
-if (restoredChat) openChat(restoredChat); else showHome();
+cloudSync = new window.AgentCloudSync.CloudSync({
+  transport: window.hermesCloud,
+  readLocalSnapshot: () => cloneJSON(preservedLocalSnapshot || currentSnapshot()),
+  applySnapshot: applySyncedSnapshot,
+  getLocalAudio: (id, chatId) => voiceUI?.store.get(id, chatId) || null,
+  cacheAudio: (id, chatId, blob) => voiceUI?.store.put(id, chatId, blob),
+  clearVisible: clearSyncedView,
+  onStatus: syncStatus
+});
+window.addEventListener('hermes-identity-denied', () => cloudSync.revoke());
+const turnRecoveryUI = window.AgentTurnUI?.create({
+  transport: window.hermesCloud, sync: cloudSync,
+  getChat: () => activeChat, getMessages: chat => messages[chat.id] || [],
+  isBusy: () => sending || Boolean(voiceUI?.busy) || !syncReady(),
+  setBusy: value => { setSending(value); setSyncGate(); },
+  notice: showToast,
+  persist: chat => { delete chat.error; persistMessages(chat); },
+  render: chat => { if (activeChat === chat) renderMessages(chat); },
+  showEvidence: result => {
+    const chat = activeChat;
+    const dialog = document.createElement('dialog'); dialog.dataset.turnEvidence = '1';
+    const title = document.createElement('h2'); title.textContent = 'Resultado sin confirmar';
+    const warning = document.createElement('p'); warning.textContent = 'No hay prueba suficiente para recuperar una respuesta exacta. No se ha reenviado nada. El historial siguiente es solo para revisión; las acciones podrían seguir ejecutándose en Hermes.';
+    const evidence = document.createElement('pre'); evidence.textContent = [result.status || '', ...(result.history || []).map(row => row.role + ': ' + row.text)].join('\n\n');
+    const close = document.createElement('button'); close.textContent = 'Cerrar'; close.onclick = () => { dialog.close(); dialog.remove(); };
+    const abandon = document.createElement('button'); abandon.textContent = 'Archivar y abrir conversación nueva';
+    abandon.onclick = async () => {
+      if (!chat || sending || voiceUI?.busy || !syncReady()) return;
+      if (!window.confirm('Esto NO cancela acciones que Hermes pueda seguir ejecutando y NO reenvía el mensaje. El hilo anterior quedará de solo lectura. La conversación nueva no heredará su contexto. ¿Continuar?')) return;
+      setSending(true); setSyncGate();
+      try {
+        await window.hermesCloud.openVoice();
+        chat.archived = true; chat.error = 'Archivada con resultado sin confirmar; no reenviar automáticamente.';
+        persistMessages(chat); await cloudSync.afterTurn();
+        dialog.close(); dialog.remove(); showHome();
+        showToast('Hilo archivado. Escribe un objetivo nuevo; no se ha reenviado el anterior.');
+      } catch (error) { showToast(error.message); }
+      finally { window.hermesCloud.closeVoice(); setSending(false); setSyncGate(); }
+    };
+    dialog.append(title, warning, evidence, close, abandon); document.body.append(dialog); dialog.showModal();
+    dialog.addEventListener('close', () => dialog.remove(), {once:true});
+  }
+});
+$('#recoverBtn').addEventListener('click', () => turnRecoveryUI?.run());
+
+if (window.AgentVoice && window.AgentVoiceUI) {
+  const voiceTransport = {
+    isConnected: () => window.hermesCloud.isConnected(),
+    openVoice: () => window.hermesCloud.openVoice(),
+    closeVoice: () => window.hermesCloud.closeVoice(),
+    transcribe: async data => { await cloudSync.beforeTurn(); return window.hermesCloud.transcribe(data); },
+    synthesize: data => window.hermesCloud.synthesize(data)
+  };
+  voiceUI = new window.AgentVoiceUI({
+    transport: voiceTransport, authorize: authorizeVoice,
+    commit: commitMessage, persist: persistMessages, respond: respondToMessage,
+    notify: showToast, isSending: () => sending, lock: () => setSending(sending)
+  });
+}
+['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = !voiceUI; $(id).title = id.includes('Mic') || id === '#micBtn' ? 'Grabar una nota de voz' : 'Conversación de voz'; });
+// A reload is not proof of delivery: never replay uncertain actions.
+for (const chat of chats) for (const entry of messages[chat.id] || []) {
+  if (entry.delivery === 'sending') { entry.delivery = 'uncertain'; entry.status = 'uncertain'; chat.error = 'Turno interrumpido por una recarga. Comprueba Hermes antes de reenviar.'; }
+  else if (entry.role === 'audio' && ['uploading','transcribing','processing'].includes(entry.status)) entry.status = 'transcription_error';
+}
+save();
+syncPills();
+// A local authorization bit is not owner verification: start with history hidden.
+cloudSync.revoke();
 refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-4').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-7').catch(() => {}));
