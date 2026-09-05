@@ -57,7 +57,7 @@ function showToast(msg) { const t = $('#toast'); t.textContent = msg; t.classLis
 /* ---------- session / connection ---------- */
 async function refreshSession() {
   if (window.hermesCloud.isConnected()) {
-    $('#loginOverlay').classList.remove('open'); setConn(true, 'Hermes conectado'); return true;
+    $('#loginOverlay').classList.remove('open'); setConn(true, window.hermesCloud.isLive() ? 'Hermes conectado' : 'Hermes autorizado'); return true;
   }
   setConn(false, 'Conectar Hermes'); showLogin('Usa tu sesión de Hermes. No necesitas API key ni contraseña de Vercel.'); return false;
 }
@@ -308,4 +308,4 @@ document.addEventListener('keydown', (e) => {
 
 ['#heroMicBtn','#micBtn','#heroVoiceBtn','#voiceBtn'].forEach(id => { $(id).disabled = true; $(id).title = 'Audio y voz pendientes de conexión'; });
 syncPills(); renderLists(); renderHome(); showHome(); refreshSession();
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-1').catch(() => {}));
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=20260905-2').catch(() => {}));

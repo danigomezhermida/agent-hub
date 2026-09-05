@@ -6,11 +6,12 @@ Interfaz de chat en https://agent-hub-theta-five.vercel.app.
 
 1. Abrir Agent Hub y pulsar **Conectar Hermes Cloud**.
 2. En la ventana de Hermes, iniciar sesión con Nous si se solicita.
-3. Pulsar **Conectar Agent Hub** y volver a la app, dejando esa ventana abierta.
+3. Pulsar **Conectar Agent Hub**. La autorización queda conservada en ese navegador y la ventana puede cerrarse.
+4. Al enviar cada mensaje se abre un conector temporal, conserva la conversación y se cierra tras recibir la respuesta.
 
 El navegador de Hermes obtiene un ticket WebSocket de un solo uso mediante su sesión autenticada y habla con `/api/ws`. El origen Vercel solo intercambia mensajes y respuestas con la ventana mediante `postMessage`. No recibe cookies, tickets ni claves. No se necesita `HERMES_CLOUD_API_KEY` para este modo.
 
-La ventana solo permite el origen de producción indicado en el código, comprueba `event.source`, canal y correlación, exige consentimiento en cada apertura y únicamente acepta el verbo chat. No permite RPC arbitrario ni elegir IDs de sesiones ajenas. Las sesiones se crean bajo `limpatexdev-cloud` y su correspondencia se guarda en el origen Hermes.
+La ventana solo permite el origen de producción indicado en el código, comprueba `event.source`, canal y correlación, conserva el consentimiento explícito en el origen Hermes para las aperturas temporales posteriores y únicamente acepta el verbo chat. No permite RPC arbitrario ni elegir IDs de sesiones ajenas. Las sesiones se crean bajo `limpatexdev-cloud` y su correspondencia se guarda en el origen Hermes.
 
 ## Componentes
 
@@ -22,7 +23,7 @@ La ventana solo permite el origen de producción indicado en el código, comprue
 
 ## Límites explícitos
 
-- Mantener la ventana de Hermes abierta; al cerrarla hay que reconectar.
+- La autorización y la correspondencia de sesiones se conservan en el almacenamiento de cada origen. Cada turno abre temporalmente el conector; el navegador debe permitir esa ventana emergente.
 - La suspensión de pestañas en móviles puede interrumpir la conexión; requiere prueba en un móvil real.
 - Listas locales: no hay sincronización multidispositivo del listado de Agent Hub.
 - Solo el perfil `limpatexdev-cloud` está conectado; los otros agentes/grupos siguen siendo prototipos.
