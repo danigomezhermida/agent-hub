@@ -407,6 +407,11 @@ def _connection() -> Iterator[sqlite3.Connection]:
                                 revision INTEGER NOT NULL CHECK (revision >= 0),
                                 snapshot_json TEXT NOT NULL
                             );
+                            CREATE TABLE IF NOT EXISTS group_state (
+                                owner_hash TEXT PRIMARY KEY,
+                                revision INTEGER NOT NULL CHECK (revision >= 0),
+                                groups_json TEXT NOT NULL
+                            );
                             CREATE TABLE IF NOT EXISTS audio (
                                 owner_hash TEXT NOT NULL,
                                 audio_id TEXT NOT NULL,
@@ -524,6 +529,82 @@ def _binding_session(
         (owner, chat_id),
     ).fetchone()
     return None if row is None else str(row["session_id"])
+
+
+_GROUP_SPECIALISTS = frozenset({
+    "limpatexdevsenior", "limpatexqa", "limpatexops",
+    "limpatexlittlehotelier", "limpatexcomercial", "limpatexdiario",
+})
+
+
+def _validate_groups(groups: Any) -> list[dict[str, Any]]:
+    # Configuration allow-list, not a claim that a profile is runnable.
+    # Execution must revalidate runtime availability and permissions separately.
+    if not isinstance(groups, list) or len(groups) > 100:
+        raise HTTPException(status_code=422, detail="Invalid groups")
+    seen = set()
+    fields = frozenset({"id", "name", "director", "members", "objective"})
+    for group in groups:
+        _exact_object(group, fields, fields, "group")
+        gid = group["id"]
+        if not isinstance(gid, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", gid) is None or gid in seen:
+            raise HTTPException(status_code=422, detail="Invalid group id")
+        seen.add(gid)
+        for field, limit in (("name", 120), ("objective", 2000)):
+            value = group[field]
+            if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                raise HTTPException(status_code=422, detail="Invalid group text")
+        if group["director"] != "limpatexdev-cloud":
+            raise HTTPException(status_code=422, detail="Invalid group director")
+        members = group["members"]
+        if (not isinstance(members, list) or not 1 <= len(members) <= len(_GROUP_SPECIALISTS)
+                or any(not isinstance(m, str) or m not in _GROUP_SPECIALISTS for m in members)
+                or len(set(members)) != len(members)):
+            raise HTTPException(status_code=422, detail="Invalid group members")
+    return groups
+
+
+def _current_groups(connection: sqlite3.Connection, owner: str) -> dict[str, Any]:
+    row = connection.execute(
+        "SELECT revision, groups_json FROM group_state WHERE owner_hash = ?", (owner,)
+    ).fetchone()
+    return {"revision": int(row["revision"]), "groups": json.loads(row["groups_json"])} if row else {"revision": 0, "groups": []}
+
+
+@router.get("/groups")
+def get_groups(request: Request) -> JSONResponse:
+    owner = _principal(request)
+    with _connection() as connection:
+        result = _current_groups(connection, owner)
+    return _private_json(result)
+
+
+@router.put("/groups")
+async def put_groups(request: Request) -> JSONResponse:
+    owner = _principal(request)
+    _same_origin(request)
+    body = await _json_body(request, 128 * 1024)
+    body = _exact_object(body, {"expectedRevision", "groups"}, frozenset({"expectedRevision", "groups"}), "groups body")
+    expected = body["expectedRevision"]
+    if type(expected) is not int or expected < 0:
+        raise HTTPException(status_code=422, detail="Invalid expectedRevision")
+    groups = _validate_groups(body["groups"])
+    with _connection() as connection:
+        try:
+            _begin(connection)
+            if _current_groups(connection, owner)["revision"] != expected:
+                raise HTTPException(status_code=409, detail="Revision conflict")
+            revision = expected + 1
+            connection.execute(
+                "INSERT INTO group_state(owner_hash, revision, groups_json) VALUES (?, ?, ?) "
+                "ON CONFLICT(owner_hash) DO UPDATE SET revision=excluded.revision, groups_json=excluded.groups_json",
+                (owner, revision, json.dumps(groups, ensure_ascii=False, separators=(",", ":"))),
+            )
+            _commit(connection)
+        except Exception:
+            _rollback(connection)
+            raise
+    return _private_json({"revision": revision, "groups": groups})
 
 
 @router.get("/identity")
