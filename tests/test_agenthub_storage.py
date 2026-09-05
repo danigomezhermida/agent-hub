@@ -81,6 +81,7 @@ def make_client(storage_root: Path, *, write_owner: bool = True) -> TestClient:
         )
     module = load_api(storage_root)
     app = FastAPI()
+    app.state.agenthub_api = module
 
     @app.middleware("http")
     async def attach_test_session(request: Request, call_next):

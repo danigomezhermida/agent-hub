@@ -1,39 +1,85 @@
-# Grupos reales — primera iteración local
+# Grupos reales de Agent Hub
 
-## Alcance y estado
-Dani pidió empezar grupos tras publicar voz/sincronización. Esta iteración implementa **solo configuración persistente en backend**, sin activar ejecuciones, publicar ni reiniciar Hermes. Las pruebas físicas pendientes de voz siguen pendientes. La UI actual de grupos permanece como demostración local y NO usa este API todavía.
+## Alcance de la primera entrega
+Grupos personales de **análisis y propuestas**. El director `limpatexdev-cloud`
+prepara un plan, consulta a todos los especialistas configurados y redacta una
+respuesta final revisada. Las aportaciones intermedias no se muestran como
+respuestas del director. Se muestran etapas y estado real.
 
-## Flujo operativo objetivo
-1. Dani define nombre, objetivo y especialistas.
-2. `limpatexdev-cloud` es el director obligatorio y único interlocutor final.
-3. Antes de ejecutar, el servidor deberá verificar disponibilidad de perfiles, permisos y composición vigente.
-4. El director asigna subtareas con alcance; recibe evidencias; revisa y sintetiza. Los especialistas no hablan directamente con Dani.
-5. Una selección de grupo nunca autoriza producción, mensajes externos, migraciones ni schedulers. Little Hotelier conserva sus jobs.
+Cada ejecución es una consulta independiente; no hereda conversaciones anteriores.
+No usa mocks de producción. No ejecuta herramientas, cambios de código, despliegues,
+correos, WhatsApp, scheduler ni jobs de Little Hotelier. Los grupos no añaden una
+nueva autorización para esas acciones. No modifica perfiles ni sus configuraciones.
+La validación física pendiente de voz no se considera completada por publicar grupos.
 
-Casos documentados por `limpatex-bot-routing`: desarrollo + revisión QA; análisis operativo; documentación de decisiones/procesos; vigilancia Little Hotelier sin sustituir runners; investigación comercial sin envíos. No se crean grupos automáticos ni se inventan flujos empresariales.
+## Contrato de servidor
+Todos los endpoints se montan bajo `/api/plugins/agent-hub`. Reutilizan la sesión
+canónica y el propietario único del plugin. Escrituras exigen Origin igual al
+dominio público configurado por la plataforma; nunca se confía en forwarded headers
+aportadas por el cliente.
 
-## API local implementada
-- `GET /api/plugins/agent-hub/groups`: `{revision, groups}`.
-- `PUT /api/plugins/agent-hub/groups`: `{expectedRevision, groups}`. Sustitución completa explícita con CAS; rechazo 409 de revisión obsoleta. No mezcla automática.
-- Cada grupo contiene exclusivamente `id`, `name`, `director`, `members`, `objective`.
-- Director fijo `limpatexdev-cloud`; miembros especialistas, sin duplicados y al menos uno.
-- Catálogo permitido: `limpatexdevsenior`, `limpatexqa`, `limpatexops`, `limpatexlittlehotelier`, `limpatexcomercial`, `limpatexdiario`.
-- El catálogo es una política de configuración, NO una certificación de salud/disponibilidad runtime.
-- Hasta 100 grupos; nombre 120 caracteres, objetivo 2000; cuerpo 128 KiB.
-- Autorización personal y comprobación Origin canónicas reutilizadas. Tabla `group_state` en la misma SQLite, particionada por propietario. Revisiones independientes del snapshot de chats.
-- No ejecuta RPC ni crea sesiones de agentes. No importa grupos demo anteriores automáticamente.
+- `GET /group-catalog`: director y especialistas permitidos, disponibilidad de sus
+  directorios/configuración (no garantiza salud del proveedor), `mode: analysis-only`.
+- `GET /groups`: `{revision, groups}`.
+- `PUT /groups`: `{expectedRevision, groups}`. CAS transaccional; 409 ante cambios
+  concurrentes. Nunca fusionar automáticamente una copia antigua.
+- `POST /groups/{groupId}/runs`: `{runId, message, expectedRevision}`. Devuelve un run.
+- `GET /group-runs/{runId}`: consulta sin reenviar ni continuar ejecución.
+- `GET /group-runs?groupId=...`: últimas 20 ejecuciones, más recientes primero,
+  permitiendo recuperar resultados desde otro dispositivo.
+
+Grupo: `{id,name,director,members,objective}`. Schema cerrado. IDs únicos y seguros;
+name 1–120 caracteres, objective 1–2000, director fijo, 1–6 especialistas únicos
+permitidos, máximo 100 grupos. Texto no blanco. Catálogo: `limpatexdevsenior`,
+`limpatexqa`, `limpatexops`, `limpatexlittlehotelier`, `limpatexcomercial`, `limpatexdiario`.
+Un perfil fuera del catálogo no se activa por existir en el sistema.
+
+Run público: `{id,groupId,state,steps,text,error}`; step `{profile,stage,status}`.
+Estados: running/completed/failed/uncertain. Solo `completed` tiene respuesta final.
+Errores del proveedor se convierten en mensajes genéricos: no se exponen logs,
+excepciones, rutas, credenciales, hashes de identidad ni aportaciones internas.
+
+## Ejecución y seguridad
+- SQLite durable: tablas separadas `group_state` y `group_runs`. No se cambia el
+  snapshot de chats/audio ni sus revisiones. WAL, transacciones y permisos existentes.
+- Se reserva runId y digest de consulta antes de llamar al proveedor. Repetir mismo
+  ID/consulta devuelve estado existente; distinto contenido con el mismo ID → 409.
+- Una ejecución activa por propietario; el índice único y la transacción impiden
+  dobles lanzamientos concurrentes.
+- Se captura configuración validada en la reserva. La disponibilidad de cada perfil
+  se vuelve a comprobar inmediatamente antes de invocarlo.
+- Director plan → especialistas secuenciales → director review. 600 segundos totales,
+  100 por subproceso, 80 de presupuesto interno, una iteración, respuesta ≤16000
+  caracteres por etapa. Consulta ≤12000 caracteres; body ≤32 KiB.
+- `group_worker.py` es un proceso aislado con `HERMES_HOME` fijado antes de importar
+  Hermes. Usa resolución canónica de credenciales y AIAgent, no interpreta stdout CLI.
+- `enabled_toolsets=[]`, asserts de tools y valid_tool_names vacíos, sin memoria,
+  contexto de ficheros, sesión persistida, revisión de fondo ni fallback de modelo.
+  Permite solo chat_completions/anthropic_messages/codex_responses. ACP y runtimes
+  Codex externos se rechazan: podrían disponer de herramientas ajenas a Hermes.
+- IPC por archivo temporal privado. stdout/stderr descartados antes de imports.
+  El padre mata el grupo de procesos al vencer el tiempo; en Linux el worker se
+  termina también al morir su padre (PDEATHSIG).
+- Al cambiar la generación del backend, runs todavía running pasan a uncertain.
+  Nunca se retoman/reenvían automáticamente. Cerrar ventana o desconectar no cancela
+  una consulta ya aceptada. La consulta de estado sí es segura.
+- No es un sandbox general ni multitenancy: solo una cuenta autorizada y transportes
+  sin herramientas. La futura ejecución de acciones requiere otro diseño de permisos.
 
 ## Verificación reproducible
 ```sh
-uv run --no-project --with pytest --with fastapi --with httpx python -m pytest tests/test_agenthub_storage.py tests/test_agenthub_groups.py -q
+uv run --no-project --with pytest --with fastapi --with httpx python -m pytest tests/test_agenthub_storage.py tests/test_agenthub_groups.py tests/test_agenthub_group_runs.py tests/test_agenthub_group_worker.py -q
 npm test
 git diff --check
 ```
-Pruebas usan SQLite temporal real y sesiones sintéticas de TestClient. No son una comprobación autenticada de producción. RED inicial 404 antes de implementar; RED validación 12 casos antes del validador; después GREEN. Cobertura adicional: rechazo de otras identidades y origen, colección inválida, CAS concurrente, reapertura de DB y preservación de chats.
+`tests/group-real-canary.py` es OPT-IN: usa SQLite temporal e identidad TestClient,
+pero proveedores reales sin sustitutos. Consume inferencia; no equivale a autorización
+real de producción. La prueba autenticada y los hashes desplegados se registran aparte.
+No usar `/opt/data/profiles/...` como directorio temporal de tests.
 
-## Próximas iteraciones (no implementadas aquí)
-1. Formulario real cliente: catálogo desde servidor, validación cliente, guardar/recargar autenticados, conflictos visibles. Retirar demos de la experiencia real.
-2. Transporte fijo del puente SSO para grupos, sin exponer credenciales ni abrir RPC arbitrario.
-3. Orquestación duradera y permisos de servidor: estado, correlación, límites de rondas, cancelación real o incertidumbre explícita, sin repetición automática de herramientas.
-4. Ejecución real director + especialistas y pruebas independientes. Una llamada `prompt.submit` por sí sola no demuestra coordinación multiagente.
-5. Publicación únicamente con orden explícita en esa tarea.
+## Publicación y rollback
+Backend primero; verificar catálogo y canary autenticado. Luego frontend y assets/SW.
+Guardar backup del plugin instalado antes de copiar. No reiniciar gateway ni jobs.
+El frontend anterior tolera las tablas nuevas. Rollback: restaurar ficheros del plugin
+respaldados y frontend anterior sin borrar SQLite. Una ejecución interrumpida no se
+certifica completada ni se reenvía después del rollback.
