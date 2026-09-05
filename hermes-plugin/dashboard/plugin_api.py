@@ -198,12 +198,17 @@ def _same_origin(request: Request) -> None:
     def effective_port(scheme: str, port: int | None) -> int | None:
         return port if port is not None else {"http": 80, "https": 443}.get(scheme)
 
+    # The platform terminates HTTPS upstream. Trust only its configured public
+    # URL, never client-supplied Forwarded/X-Forwarded-* headers.
+    public_url = os.environ.get("HERMES_DASHBOARD_PUBLIC_URL", "")
+    expected = urlsplit(public_url) if public_url else request.url
     try:
         matches = (
-            parsed.scheme == request.url.scheme
-            and parsed.hostname.lower() == (request.url.hostname or "").lower()
+            expected.scheme in {"http", "https"}
+            and parsed.scheme == expected.scheme
+            and parsed.hostname.lower() == (expected.hostname or "").lower()
             and effective_port(parsed.scheme, parsed.port)
-            == effective_port(request.url.scheme, request.url.port)
+            == effective_port(expected.scheme, expected.port)
         )
     except ValueError:
         matches = False

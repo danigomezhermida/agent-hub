@@ -21,6 +21,27 @@ BASE = "/api/plugins/agent-hub"
 ORIGIN = "http://testserver"
 
 
+@pytest.fixture(autouse=True)
+def isolated_public_origin(monkeypatch):
+    monkeypatch.delenv("HERMES_DASHBOARD_PUBLIC_URL", raising=False)
+
+
+def test_https_proxy_origin_is_pinned(tmp_path, monkeypatch):
+    client = make_client(tmp_path / "proxy")
+    monkeypatch.setenv("HERMES_DASHBOARD_PUBLIC_URL", "https://hub.example.com")
+    snapshot = {"chats": [], "messages": {}, "sessions": {}}
+    payload = {"expectedRevision": 0, "snapshot": snapshot}
+    headers = {"x-test-principal": "owner-a", "origin": "https://hub.example.com"}
+    assert client.put(BASE + "/state", json=payload, headers=headers).status_code == 200
+    readback = client.get(BASE + "/state", headers=auth_headers()).json()
+    assert readback["snapshot"] == snapshot
+    for origin in ["https://evil.example", "http://hub.example.com", "https://hub.example.com:444", ORIGIN]:
+        rejected = dict(headers, origin=origin)
+        rejected["x-forwarded-host"] = "hub.example.com"
+        rejected["x-forwarded-proto"] = "https"
+        assert client.put(BASE + "/state", json=payload, headers=rejected).status_code == 403
+
+
 @dataclass(frozen=True)
 class Session:
     provider: str
