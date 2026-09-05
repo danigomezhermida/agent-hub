@@ -1,7 +1,7 @@
 # Grupos reales — primera iteración local
 
 ## Alcance y estado
-Dani pidió empezar grupos tras publicar voz/sincronización. Esta iteración implementa **solo configuración persistente en backend**, sin activar ejecuciones, publicar ni reiniciar Hermes. Las pruebas físicas pendientes de voz siguen pendientes. La UI actual de grupos permanece como demostración local y NO usa este API todavía.
+La UI ya consume exclusivamente el catálogo, configuraciones y ejecuciones reales del backend mediante operaciones fijas del puente autenticado. Se retiraron los grupos de demostración. Este repositorio no activa, publica ni reinicia Hermes por sí mismo.
 
 ## Flujo operativo objetivo
 1. Dani define nombre, objetivo y especialistas.
@@ -12,16 +12,15 @@ Dani pidió empezar grupos tras publicar voz/sincronización. Esta iteración im
 
 Casos documentados por `limpatex-bot-routing`: desarrollo + revisión QA; análisis operativo; documentación de decisiones/procesos; vigilancia Little Hotelier sin sustituir runners; investigación comercial sin envíos. No se crean grupos automáticos ni se inventan flujos empresariales.
 
-## API local implementada
-- `GET /api/plugins/agent-hub/groups`: `{revision, groups}`.
-- `PUT /api/plugins/agent-hub/groups`: `{expectedRevision, groups}`. Sustitución completa explícita con CAS; rechazo 409 de revisión obsoleta. No mezcla automática.
-- Cada grupo contiene exclusivamente `id`, `name`, `director`, `members`, `objective`.
-- Director fijo `limpatexdev-cloud`; miembros especialistas, sin duplicados y al menos uno.
-- Catálogo permitido: `limpatexdevsenior`, `limpatexqa`, `limpatexops`, `limpatexlittlehotelier`, `limpatexcomercial`, `limpatexdiario`.
-- El catálogo es una política de configuración, NO una certificación de salud/disponibilidad runtime.
-- Hasta 100 grupos; nombre 120 caracteres, objetivo 2000; cuerpo 128 KiB.
-- Autorización personal y comprobación Origin canónicas reutilizadas. Tabla `group_state` en la misma SQLite, particionada por propietario. Revisiones independientes del snapshot de chats.
-- No ejecuta RPC ni crea sesiones de agentes. No importa grupos demo anteriores automáticamente.
+## API de la entrega
+- `GET /api/plugins/agent-hub/group-catalog`: director y especialistas con disponibilidad real; un error no se sustituye por disponibilidad inventada.
+- `GET/PUT /api/plugins/agent-hub/groups`: lectura y sustitución completa con CAS mediante `expectedRevision`.
+- `POST /api/plugins/agent-hub/groups/{groupId}/runs`: inicio idempotente con `runId` persistido previamente, mensaje y revisión esperada.
+- `GET /api/plugins/agent-hub/group-runs/{runId}` y `GET /api/plugins/agent-hub/group-runs?groupId=...`: consulta segura de estado e historial reciente.
+- Cada grupo contiene exclusivamente `id`, `name`, `director`, `members` y `objective`; el director fijo es `limpatexdev-cloud` y debe existir al menos un especialista.
+- El servidor revalida disponibilidad, composición, propietario personal y revisión antes de aceptar una ejecución. Una ejecución pendiente por propietario.
+- El cliente solo muestra pasos de estado y el texto final del director; no recibe resultados crudos de especialistas.
+- La configuración de grupos mantiene una revisión independiente del snapshot de chats.
 
 ## Verificación reproducible
 ```sh
@@ -31,9 +30,10 @@ git diff --check
 ```
 Pruebas usan SQLite temporal real y sesiones sintéticas de TestClient. No son una comprobación autenticada de producción. RED inicial 404 antes de implementar; RED validación 12 casos antes del validador; después GREEN. Cobertura adicional: rechazo de otras identidades y origen, colección inválida, CAS concurrente, reapertura de DB y preservación de chats.
 
-## Próximas iteraciones (no implementadas aquí)
-1. Formulario real cliente: catálogo desde servidor, validación cliente, guardar/recargar autenticados, conflictos visibles. Retirar demos de la experiencia real.
-2. Transporte fijo del puente SSO para grupos, sin exponer credenciales ni abrir RPC arbitrario.
-3. Orquestación duradera y permisos de servidor: estado, correlación, límites de rondas, cancelación real o incertidumbre explícita, sin repetición automática de herramientas.
-4. Ejecución real director + especialistas y pruebas independientes. Una llamada `prompt.submit` por sí sola no demuestra coordinación multiagente.
-5. Publicación únicamente con orden explícita en esa tarea.
+## Cliente y seguridad
+- Operaciones permitidas: `getGroupCatalog`, `getGroups`, `putGroups`, `startGroupRun`, `getGroupRun` y `getGroupRuns`; no existe RPC arbitrario desde el cliente.
+- El formulario usa CAS y verifica cada escritura con un `getGroups` posterior antes de mostrar éxito.
+- El `runId` se persiste antes del POST. Una recarga nunca repite el POST; la recuperación se hace solo mediante GET explícito, incluido el historial de otro dispositivo.
+- Una respuesta HTTP definitiva al inicio queda como «no enviada»; una pérdida de transporte queda incierta y bloquea nuevas ejecuciones hasta consultar.
+- Cada ejecución es una consulta independiente, sin contexto heredado. El servidor deshabilita herramientas y limita el resultado visible al texto final del director.
+- Publicación únicamente con orden explícita en la tarea de integración.

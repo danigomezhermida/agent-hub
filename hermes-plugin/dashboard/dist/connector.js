@@ -9,6 +9,7 @@
   const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
   const MAX_TTS_AUDIO_BYTES = 16 * 1024 * 1024;
   const MAX_TTS_TEXT = 8000;
+  const STORAGE_OPS = new Set(['identity','getState','putState','getAudio','putAudio','getBindings','putBinding','claimTurn','getTurn','finishTurn','getGroupCatalog','getGroups','putGroups','startGroupRun','getGroupRun','getGroupRuns']);
   const params = new URLSearchParams(location.search);
   const revokeMode = params.get('mode') === 'revoke' || params.get('revoke') === '1';
   const voiceMode = params.get('mode') === 'voice';
@@ -67,6 +68,7 @@
   }
 
   async function storage(op, args = {}) {
+    if (!STORAGE_OPS.has(op)) throw new Error('Operación de almacenamiento no permitida.');
     if (!allowed && op !== 'identity') throw new Error('Autoriza esta conexión primero.');
     const controller = new AbortController(); fetchControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), 30000);
@@ -366,7 +368,7 @@
       const result = data.type === 'recover' ? await recover(data) : data.type === 'chat' ? await chat(data) : data.type === 'transcribe' ? await transcribe(data) : data.type === 'storage' ? await storage(data.op, data.args) : await synthesize(data);
       post({ type: 'result', requestId: data.requestId, ok: true, result });
     } catch (error) {
-      post({ type: 'result', requestId: data.requestId, ok: false, error: ['chat','storage','recover'].includes(data.type) ? error.message : 'No se pudo procesar el audio. Puedes reintentar.', code: error.code });
+      post({ type: 'result', requestId: data.requestId, ok: false, error: ['chat','storage','recover'].includes(data.type) ? error.message : 'No se pudo procesar el audio. Puedes reintentar.', code: error.code, httpStatus: Number.isInteger(error.httpStatus) ? error.httpStatus : undefined });
     } finally {
       processing = false; activeVoiceRequest = null;
       if (!voiceMode) closeSoon();

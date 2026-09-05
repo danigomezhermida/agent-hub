@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260905-7" />
+  <link rel="stylesheet" href="styles.css?v=20260905-8" />
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebApplication","name":"Agent Hub Limpatex","applicationCategory":"BusinessApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0"}}
   </script>
@@ -36,7 +36,9 @@
         <ul class="chat-list" id="chatList"></ul>
         <p class="side-label">Grupos</p>
         <ul class="chat-list" id="groupList"></ul>
-        <button class="side-link" id="newGroupBtn">＋ Crear grupo</button>
+        <button class="side-link" id="reloadGroupsBtn" type="button">↻ Cargar grupos reales</button>
+        <button class="side-link" id="newGroupBtn" type="button">＋ Crear grupo</button>
+        <span class="groups-status" id="groupsStatus" role="status">Sincroniza para cargar grupos reales.</span>
       </nav>
       <div class="side-bottom">
         <div class="sync-panel" aria-labelledby="syncTitle">
@@ -111,6 +113,32 @@
           </div>
         </div>
       </section>
+
+      <section class="group-view" id="viewGroup" aria-label="Detalle del grupo" hidden>
+        <header class="group-head">
+          <div><span class="kicker">GRUPO REAL</span><h2 id="groupTitle">Grupo</h2></div>
+          <button class="secondary-btn" id="editGroupBtn" type="button">Editar</button>
+        </header>
+        <div class="group-content">
+          <section class="group-card">
+            <h3>Objetivo</h3><p id="groupObjective"></p>
+            <h3>Equipo</h3><div class="group-members" id="groupMembers"></div>
+            <p class="group-limit" id="groupNotice"></p>
+          </section>
+          <section class="group-card group-run-card">
+            <h3>Nueva petición de análisis</h3>
+            <label for="groupMessage">Mensaje para el director</label>
+            <textarea id="groupMessage" rows="5" maxlength="12000" placeholder="Describe el análisis o propuesta que necesitas"></textarea>
+            <div class="group-actions">
+              <button class="primary-btn" id="startGroupBtn" type="button">Iniciar análisis</button>
+              <button class="secondary-btn" id="refreshGroupRunBtn" type="button">Consultar ejecuciones</button>
+            </div>
+            <p class="group-run-status" id="groupRunStatus" role="status" aria-live="polite">Sin ejecuciones para este grupo.</p>
+            <ol class="group-run-steps" id="groupRunSteps"></ol>
+            <section class="group-result" id="groupRunResult" hidden><h3>Resultado final del director</h3><p></p></section>
+          </section>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -147,6 +175,22 @@
       <div class="choice-list" id="choiceList"></div>
     </div>
   </div>
+  <div class="simple-dialog group-dialog" id="groupDialog" hidden>
+    <form class="dialog-card group-form" id="groupForm">
+      <button class="close-window" id="cancelGroupBtn" type="button" aria-label="Cerrar">×</button>
+      <span class="kicker">CONFIGURACIÓN REAL</span>
+      <h2 id="groupFormTitle">Crear grupo</h2>
+      <label for="groupName">Nombre</label>
+      <input id="groupName" maxlength="120" required />
+      <label for="groupObjectiveInput">Objetivo</label>
+      <textarea id="groupObjectiveInput" maxlength="2000" rows="5" required></textarea>
+      <span class="form-label">Director obligatorio</span><p id="groupDirector"></p>
+      <span class="form-label">Especialistas</span><div class="group-member-choices" id="groupMemberChoices"></div>
+      <p class="group-limit">Cada ejecución es una consulta independiente, sin contexto heredado de chats. Solo análisis y propuestas; herramientas deshabilitadas en servidor. Cerrar o desconectar no cancela una ejecución ya aceptada.</p>
+      <p class="form-error" id="groupFormError" role="alert"></p>
+      <button class="primary-btn" id="saveGroupBtn" type="submit">Guardar en Hermes</button>
+    </form>
+  </div>
   <dialog id="voiceDialog" class="voice-dialog" aria-labelledby="voiceTitle" hidden>
     <h2 id="voiceTitle">Nota de voz</h2>
     <p id="voiceStatus" role="status" aria-live="polite">Preparando…</p>
@@ -168,6 +212,7 @@
   <script src="cloud-sync.js?v=20260905-6"></script>
   <script src="voice-engine.js?v=20260905-7"></script>
   <script src="voice-ui.js?v=20260905-7"></script>
-  <script src="app.js?v=20260905-7"></script>
+  <script src="groups-ui.js?v=20260905-8"></script>
+  <script src="app.js?v=20260905-8"></script>
 </body>
 </html>

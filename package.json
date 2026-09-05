@@ -4,10 +4,10 @@
   "private": true,
   "description": "Static Agent Hub client with focused Node and browser regression tests",
   "scripts": {
-    "check": "node --check app.js && node --check cloud-connection.js && node --check voice-engine.js && node --check voice-ui.js && node --check sw.js && node --check cloud-sync.js && node --check recovery-ui.js && node --check hermes-plugin/dashboard/dist/storage-transport.js && node --check hermes-plugin/dashboard/dist/turn-recovery.js && node --check hermes-plugin/dashboard/dist/connector.js",
+    "check": "node --check app.js && node --check groups-ui.js && node --check cloud-connection.js && node --check voice-engine.js && node --check voice-ui.js && node --check sw.js && node --check cloud-sync.js && node --check recovery-ui.js && node --check hermes-plugin/dashboard/dist/storage-transport.js && node --check hermes-plugin/dashboard/dist/turn-recovery.js && node --check hermes-plugin/dashboard/dist/connector.js",
     "test:unit": "node --test tests/*.test.cjs tests/*.test.js",
     "test": "npm run check && npm run test:unit",
-    "test:browser": "node tests/composer-browser.cjs && node tests/voice-browser.cjs && node tests/voice-cross-origin.cjs"
+    "test:browser": "node tests/composer-browser.cjs && node tests/groups-browser.cjs && node tests/voice-browser.cjs && node tests/voice-cross-origin.cjs"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.2.5",

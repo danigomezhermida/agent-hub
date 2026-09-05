@@ -34,7 +34,7 @@ test('CAS version and snapshot are explicitly serialized',async()=>{
 test('backend errors are typed and never expose response body',async()=>{
  for(const [status,code] of [[403,'identity'],[409,'conflict'],[500,'storage']]){
   const h=harness({ok:false,status,json:async()=>{throw Error('must not read');},text:async()=>{throw Error('must not read');}});
-  await assert.rejects(h.api.request('identity'),e=>e.code===code&&!e.message.includes('must not read'));
+  await assert.rejects(h.api.request('identity'),e=>e.code===code&&e.httpStatus===status&&!e.message.includes('must not read'));
  }
 });
 test('audio validates size before upload and retrieves native Blob',async()=>{
@@ -54,4 +54,32 @@ test('turn claim carries immutable message identity and prompt digest',async()=>
  await h.api.request('finishTurn',{...args,state:'completed',text:'Respuesta'});
  assert.equal(h.requests[1].options.method,'PATCH');
  assert.deepEqual(JSON.parse(h.requests[1].options.body),{requestId:'request',state:'completed',text:'Respuesta'});
+});
+
+test('group operations use only fixed paths and exact write payloads',async()=>{
+ const h=harness();
+ await h.api.request('getGroupCatalog');
+ await h.api.request('getGroups');
+ await h.api.request('putGroups',{expectedRevision:7,groups:[{id:'g_1'}]});
+ await h.api.request('startGroupRun',{groupId:'g_1',runId:'run_1',message:'Analiza',expectedRevision:7});
+ await h.api.request('getGroupRun',{runId:'run_1'});
+ await h.api.request('getGroupRuns',{groupId:'g_1'});
+ assert.deepEqual(h.requests.map(r=>r.url),[
+  '/api/plugins/agent-hub/group-catalog',
+  '/api/plugins/agent-hub/groups',
+  '/api/plugins/agent-hub/groups',
+  '/api/plugins/agent-hub/groups/g_1/runs',
+  '/api/plugins/agent-hub/group-runs/run_1',
+  '/api/plugins/agent-hub/group-runs?groupId=g_1'
+ ]);
+ assert.deepEqual(JSON.parse(h.requests[2].options.body),{expectedRevision:7,groups:[{id:'g_1'}]});
+ assert.equal(h.requests[3].options.method,'POST');
+ assert.deepEqual(JSON.parse(h.requests[3].options.body),{runId:'run_1',message:'Analiza',expectedRevision:7});
+});
+
+test('invalid group and run ids never reach fetch',async()=>{
+ const h=harness();
+ await assert.rejects(h.api.request('startGroupRun',{groupId:'../g',runId:'run',message:'x',expectedRevision:0}));
+ await assert.rejects(h.api.request('getGroupRun',{runId:'a/b'}));
+ assert.equal(h.requests.length,0);
 });
